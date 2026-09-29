@@ -113,7 +113,7 @@ export function mail(kind, job, crew, ctx) {
     return `${to(job.agent_email)}Subject: GATE PERMISSION – ${job.vessel} / ${port.toUpperCase()}${job.etb ? ' / ' + fmtD(job.etb).slice(0, 5) : ''}\n\nDear ${job.agent || 'Sir/Madam'},\n\nPlease arrange gate permission for the following persons:\n\n${lines.join('\n')}\n\n${sig}`;
   }
   if (kind === 'plan') {
-    const rows = crew.map(c => `${c.name} (${c.rank || '-'}) ${c.type === 'on' ? 'On signer' : 'Off signer'}${c.flight ? ' ' + c.flight : ''}:\n` + c.cps.map((x, j) => `  ${x.name_en} ${fmtD(expected(c, j, late))}`).join('\n'));
+    const rows = crew.map(c => `${c.name} (${c.rank || '-'}) ${c.type === 'on' ? 'On signer' : 'Off signer'}${c.flight ? ' ' + c.flight : ''}:\n` + c.cps.map((x, j) => `  ${x.name_en} ${x.actual != null ? fmtD(x.actual) + ' (done)' : fmtD(expected(c, j, late))}`).join('\n'));
     return `${to(job.owner_email)}Subject: ${job.vessel} – CREW CHANGE PLAN\n\nDear ${job.owner || 'Sir/Madam'} / Captain,\n\nPlease find the crew change plan at ${port} (local time):\n\n${rows.join('\n\n')}\n\n${sig}`;
   }
   const now = Date.now();

@@ -169,7 +169,7 @@ test('confirm checkpoints in order, idempotent retry, undo', async () => {
   assert.equal(r.data.at, at);
   r = await field('POST', `/api/crew/${S.c1}/confirm`, { idx: 0, at });
   assert.equal(r.data.duplicate, true, 'offline retry with same time is accepted once');
-  assert.equal((await field('POST', `/api/crew/${S.c1}/confirm`, { idx: 0, at: at + 5000 })).status, 409);
+  assert.equal((await office('POST', `/api/crew/${S.c1}/confirm`, { idx: 0, at: at - 600000 })).status, 409, 'someone else confirming the same point is refused');
   r = await field('POST', `/api/crew/${S.c1}/confirm`, { idx: 1, at: Date.now() + 3600000 });
   assert.ok(Math.abs(r.data.at - Date.now()) < 5000, 'future time from device is replaced by server time');
   assert.equal((await field('POST', `/api/crew/${S.c1}/undo`)).status, 200);
@@ -178,6 +178,39 @@ test('confirm checkpoints in order, idempotent retry, undo', async () => {
   assert.equal(c.cps[1].actual, null);
   assert.equal(c.cps[0].by, S.somsak);
   assert.equal((await field('POST', `/api/crew/${S.c1}/notes`, { text: 'กระเป๋าตกค้าง รอ 30 นาที' })).status, 200);
+});
+
+test('review fixes: private data, clock skew, undo guard, atomic add, plan order', async () => {
+  const f = (await field('GET', '/api/field')).data;
+  assert.ok(f.crew.every(c => !('passport' in c)), 'field list has no passport numbers');
+  const jv = (await field('GET', `/api/jobs/${S.job}`)).data;
+  assert.equal(jv.activity.length, 0, 'field user gets no job-wide activity feed');
+  assert.equal(jv.job.owner_email, undefined);
+  assert.equal(jv.job.agent_email, undefined);
+  assert.ok(jv.crew.every(c => !('passport' in c)));
+  const me = (await field('GET', '/api/me')).data;
+  assert.ok(me.vehicles.every(v => !('driver_id' in v)), 'field user gets no driver ID numbers');
+  assert.ok((await office('GET', '/api/me')).data.vehicles.some(v => 'driver_id' in v), 'office still sees driver IDs');
+
+  const realNow = Date.now();
+  const deviceNow = realNow - 30 * 60000;
+  let r = await field('POST', `/api/crew/${S.c2}/confirm`, { idx: 0, at: deviceNow - 5 * 60000, sent_at: deviceNow });
+  assert.equal(r.status, 200);
+  assert.ok(Math.abs(r.data.at - (realNow - 5 * 60000)) < 5000, 'slow phone clock is corrected to server time');
+  r = await field('POST', `/api/crew/${S.c2}/confirm`, { idx: 1, at: deviceNow - 60000, sent_at: deviceNow + 1000 });
+  assert.equal(r.status, 200);
+  assert.equal((await field('POST', `/api/crew/${S.c2}/undo`, { idx: 0 })).status, 409, 'undo refuses when the last point changed');
+  assert.equal((await field('POST', `/api/crew/${S.c2}/undo`, { idx: 1 })).status, 200);
+
+  const before = (await office('GET', `/api/jobs/${S.job}`)).data.crew.length;
+  assert.equal((await office('POST', `/api/jobs/${S.job}/crew`, { crew: [{ name: 'Alpha' }, { name: '' }] })).status, 400);
+  assert.equal((await office('GET', `/api/jobs/${S.job}`)).data.crew.length, before, 'failed batch adds nobody');
+  r = await office('POST', `/api/jobs/${S.job}/crew`, { crew: [{ name: 'Bravo', type: 'on' }, { name: 'Charlie', type: 'off' }] });
+  const added = (await office('GET', `/api/jobs/${S.job}`)).data.crew.filter(c => r.data.ids.includes(c.id));
+  assert.deepEqual(added.map(c => [c.name, c.cps.length]).sort(), [['Bravo', 8], ['Charlie', 7]], 'each new crew gets its own checkpoints');
+  const t0 = Date.now();
+  assert.equal((await office('PUT', `/api/crew/${added[0].id}/plan`, { plans: [t0 + 3600000, null, t0, null, null, null, null, null].slice(0, added[0].cps.length) })).status, 400, 'order checked across blank points');
+  for (const c of added) await office('DELETE', `/api/crew/${c.id}`);
 });
 
 test('photos upload, view by allowed users only, size and type checks', async () => {

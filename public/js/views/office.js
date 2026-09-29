@@ -265,7 +265,7 @@ function planDialog(c) {
     inputs.forEach((inp, i) => {
       const v = fromInput(inp.value);
       if (v != null) { t = v; return; }
-      if (t != null) { t += (tpl[i] ? tpl[i].gap : 30) * MIN; inp.value = toInput(t); }
+      if (t != null) { t += (tpl[i] && tpl[i].th === c.cps[i].name ? tpl[i].gap : 30) * MIN; inp.value = toInput(t); }
     });
     if (t == null) toast('ใส่เวลาจุดแรกก่อน');
   });

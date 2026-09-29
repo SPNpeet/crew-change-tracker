@@ -25,15 +25,16 @@ export async function api(method, path, body, opts = {}) {
 const OUTBOX = 'cct-outbox-v1';
 function readBox() { try { return JSON.parse(localStorage.getItem(OUTBOX) || '[]'); } catch (e) { return []; } }
 function writeBox(list) { try { localStorage.setItem(OUTBOX, JSON.stringify(list)); } catch (e) {} }
-export const pendingCount = () => readBox().length;
-export const pendingFor = crewId => readBox().filter(x => x.crew === crewId);
+export const pendingCount = uid => readBox().filter(x => x.uid === uid).length;
+export const pendingFor = (crewId, uid) => readBox().filter(x => x.crew === crewId && x.uid === uid);
+const keep = status => status === 0 || status === 401 || status === 429 || status >= 500;
 
-export async function confirmPoint(crewId, idx, extra) {
-  const item = { crew: crewId, idx, at: Date.now(), lat: extra.lat, lng: extra.lng };
+export async function confirmPoint(crewId, idx, extra, uid) {
+  const item = { uid, crew: crewId, idx, at: Date.now(), lat: extra.lat, lng: extra.lng };
   try {
-    return await api('POST', `/api/crew/${crewId}/confirm`, item);
+    return await api('POST', `/api/crew/${crewId}/confirm`, { ...item, sent_at: Date.now() });
   } catch (e) {
-    if (e.status === 0) {
+    if (keep(e.status)) {
       writeBox(readBox().concat(item));
       return { queued: true, at: item.at };
     }
@@ -42,22 +43,21 @@ export async function confirmPoint(crewId, idx, extra) {
 }
 
 let flushing = false;
-export async function flushOutbox() {
-  if (flushing) return 0;
+export async function flushOutbox(uid) {
+  if (flushing || uid == null) return 0;
   flushing = true;
   let sent = 0;
   try {
-    let list = readBox();
-    while (list.length) {
-      const it = list[0];
+    for (;;) {
+      const it = readBox().find(x => x.uid === uid);
+      if (!it) break;
       try {
-        await api('POST', `/api/crew/${it.crew}/confirm`, it);
+        await api('POST', `/api/crew/${it.crew}/confirm`, { ...it, sent_at: Date.now() }, { allow401: true });
         sent++;
       } catch (e) {
-        if (e.status === 0) break;
+        if (keep(e.status)) break;
       }
-      list = readBox().slice(1);
-      writeBox(list);
+      writeBox(readBox().filter(x => x !== it && !(x.uid === it.uid && x.crew === it.crew && x.idx === it.idx && x.at === it.at)));
     }
   } finally {
     flushing = false;

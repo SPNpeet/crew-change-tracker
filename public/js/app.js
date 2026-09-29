@@ -149,10 +149,10 @@ function tick() {
 setInterval(tick, 20000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tick(); });
 window.addEventListener('online', async () => {
-  const n = await flushOutbox();
+  const n = await flushOutbox(A.me && A.me.id);
   if (n) { toast(`ส่งข้อมูลที่ค้างไว้ ${n} รายการแล้ว`); tick(); }
 });
-setInterval(async () => { if (pendingCount() && navigator.onLine) { const n = await flushOutbox(); if (n) tick(); } }, 30000);
+setInterval(async () => { if (A.me && pendingCount(A.me.id) && navigator.onLine) { const n = await flushOutbox(A.me.id); if (n) tick(); } }, 30000);
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('/sw.js').catch(() => {});
 

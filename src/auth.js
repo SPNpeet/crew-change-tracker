@@ -52,9 +52,9 @@ export async function login(env, username, password) {
   }
   const { hash } = await hashPassword(String(password || ''), u.pw_salt);
   if (!sameBytes(hash, u.pw_hash)) {
-    const failed = u.failed + 1;
-    const locked = failed >= MAX_FAILED ? t + LOCK_MS : 0;
-    await env.DB.prepare('UPDATE users SET failed = ?, locked_until = ? WHERE id = ?').bind(locked ? 0 : failed, locked, u.id).run();
+    const row = await env.DB.prepare('UPDATE users SET failed = failed + 1 WHERE id = ? RETURNING failed').bind(u.id).first();
+    const locked = row.failed >= MAX_FAILED;
+    if (locked) await env.DB.prepare('UPDATE users SET failed = 0, locked_until = ? WHERE id = ?').bind(t + LOCK_MS, u.id).run();
     throw new HttpError(401, locked ? 'ใส่รหัสผิดหลายครั้ง ระบบล็อกบัญชีนี้ไว้ 15 นาที' : 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
   }
   const token = randomId(32);

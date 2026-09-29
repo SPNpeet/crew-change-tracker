@@ -10,7 +10,7 @@ const late = () => A.settings.late_min;
 
 function overlay() {
   for (const c of F.crew) {
-    for (const p of pendingFor(c.id)) {
+    for (const p of pendingFor(c.id, A.me.id)) {
       const x = c.cps[p.idx];
       if (x && x.actual == null) { x.actual = p.at; x.pending = true; }
     }
@@ -18,7 +18,7 @@ function overlay() {
 }
 
 async function load() {
-  await flushOutbox().catch(() => 0);
+  await flushOutbox(A.me.id).catch(() => 0);
   F = await api('GET', '/api/field');
   overlay();
 }
@@ -53,7 +53,7 @@ function list() {
     const u = A.user(c.agent_id);
     return `<a class="crow" href="/field/${c.id}" data-link>${avatar(c)}<div class="cm"><div class="r1"><span class="nm">${esc(c.name)}</span></div><div class="sub">${i === -1 ? 'ครบทุกจุดแล้ว' : 'ถัดไป: ' + esc(c.cps[i].name) + (c.cps[i].plan ? ' · ' + dhm(expected(c, i, late())) : '')}</div>${seeAll ? `<div class="sub">ดูแลโดย ${u ? 'คุณ' + esc(u.name) : '-'}</div>` : ''}<div class="r3"><div class="mb"><i style="width:${c.cps.length ? Math.round(dn / c.cps.length * 100) : 0}%;background:${st.k === 'late' ? 'var(--red)' : 'var(--green)'}"></i></div>${pill(st.cls, st.label)}</div></div><span class="chev">${icon('right')}</span></a>`;
   };
-  const pend = F.crew.reduce((a, c) => a + pendingFor(c.id).length, 0);
+  const pend = F.crew.reduce((a, c) => a + pendingFor(c.id, me.id).length, 0);
   return `<div class="fa"><div class="fh">
     <a class="me" href="/account" data-link><span class="av">${esc([...me.name][0] || '?')}</span><span class="who3"><b>คุณ${esc(me.name)}</b><small>${esc(me.title || roleLabel(me))}</small></span><span class="sw">บัญชี${icon('right')}</span></a>
     <div class="stats"><div><b>${F.crew.length}</b><span>${seeAll ? 'ทั้งหมด' : 'ที่ดูแล'}</span></div><div><b style="color:${nLate ? 'var(--red)' : 'var(--ink)'}">${nLate}</b><span>ช้ากว่าแผน</span></div><div><b style="color:${done ? 'var(--green)' : 'var(--ink)'}">${done}</b><span>ครบแล้ว</span></div></div>
@@ -68,6 +68,7 @@ function detail(id) {
   const c = F.crew.find(x => x.id === id);
   if (!c) return `<div class="fa"><div class="fa-bar"><button class="navback" data-act="back" type="button">${icon('left')}กลับ</button></div><div class="fa-body"><div class="card empty"><div class="nm">ไม่พบลูกเรือคนนี้</div><div class="sub">อาจถูกย้ายไปผู้ดูแลคนอื่น หรืองานปิดแล้ว</div></div></div></div>`;
   const job = F.jobs.find(j => j.id === c.job_id) || {};
+  if (!c.cps.length) return `<div class="fa"><div class="fa-bar"><button class="navback" data-act="back" type="button">${icon('left')}กลับ</button><span class="ttl">${esc(job.vessel || '')}</span></div><div class="fa-body"><div class="card empty"><div class="nm">${esc(c.name)} ยังไม่มีจุดสถานะ</div><div class="sub">แจ้งสำนักงานให้ตรวจข้อมูลลูกเรือคนนี้</div></div></div></div>`;
   const now = Date.now(), i = nextIdx(c), st = status(c, now, late());
   const veh = A.vehicle(c.vehicle_id);
   const hotel = A.hotels.find(h => h.id === c.hotel_id);
@@ -114,7 +115,7 @@ export const actions = {
     const c = crewOf(t.dataset.id), idx = +t.dataset.idx;
     const gps = await Promise.race([getGps(), new Promise(r => setTimeout(() => r(null), 1500))]);
     try {
-      const r = await confirmPoint(c.id, idx, gps ? { lat: gps.lat, lng: gps.lng } : {});
+      const r = await confirmPoint(c.id, idx, gps ? { lat: gps.lat, lng: gps.lng } : {}, A.me.id);
       c.cps[idx].actual = r.at;
       if (r.queued) { c.cps[idx].pending = true; toast(`ไม่มีสัญญาณ บันทึกเวลา ${hm(r.at)} ไว้ในเครื่องแล้ว ระบบส่งเองเมื่อมีสัญญาณ`, 4000); }
       else toast(`บันทึก "${c.cps[idx].name}" เวลา ${hm(r.at)} แล้ว สำนักงานเห็นทันที`);
@@ -130,7 +131,7 @@ export const actions = {
     const c = crewOf(t.dataset.id);
     const last = [...c.cps].reverse().find(x => x.actual != null);
     if (!last || !window.confirm(`ย้อนกลับ "${last.name}" ?`)) return;
-    await api('POST', `/api/crew/${c.id}/undo`);
+    await api('POST', `/api/crew/${c.id}/undo`, { idx: last.idx });
     toast(`ย้อนกลับ "${last.name}" แล้ว`);
     await poll();
   },

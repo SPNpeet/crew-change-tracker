@@ -133,7 +133,7 @@ async function boot(env, u) {
   const settings = await loadSettings(env);
   const [users, vehicles, hotels] = await Promise.all([
     env.DB.prepare('SELECT id, name, role, see_all, title, phone, id_card, active FROM users ORDER BY active DESC, name').all(),
-    env.DB.prepare('SELECT * FROM vehicles ORDER BY active DESC, name').all(),
+    env.DB.prepare(isOffice(u) ? 'SELECT * FROM vehicles ORDER BY active DESC, name' : 'SELECT id, name, plate, driver, driver_phone, active FROM vehicles ORDER BY active DESC, name').all(),
     env.DB.prepare('SELECT * FROM hotels ORDER BY active DESC, name').all()
   ]);
   const people = isOffice(u) ? users.results : users.results.map(x => ({ id: x.id, name: x.name, role: x.role, title: x.title, active: x.active }));
@@ -427,10 +427,18 @@ async function jobFull(env, u, id) {
     if (!mine) throw new HttpError(403, 'บัญชีนี้ไม่มีสิทธิ์ดูงานนี้');
   }
   const crew = await crewRows(env, isOffice(u) || seesAllCrew(u) ? 'job_id = ?' : 'job_id = ? AND agent_id = ?', isOffice(u) || seesAllCrew(u) ? [id] : [id, u.id]);
-  const { results: activity } = await env.DB.prepare('SELECT a.at, a.kind, a.text, a.user_id, u.name AS who FROM activity a LEFT JOIN users u ON u.id = a.user_id WHERE a.job_id = ? ORDER BY a.at DESC, a.id DESC LIMIT 150').bind(id).all();
   const job = jobOut(j);
-  if (!isOffice(u)) delete job.owner_token;
+  if (!isOffice(u)) {
+    for (const k of ['owner_token', 'owner_email', 'agent_email', 'remark']) delete job[k];
+    return { job, crew: crew.map(fieldSafe), activity: [], now: now() };
+  }
+  const { results: activity } = await env.DB.prepare('SELECT a.at, a.kind, a.text, a.user_id, u.name AS who FROM activity a LEFT JOIN users u ON u.id = a.user_id WHERE a.job_id = ? ORDER BY a.at DESC, a.id DESC LIMIT 150').bind(id).all();
   return { job, crew, activity, now: now() };
+}
+
+function fieldSafe(c) {
+  const { passport, ...rest } = c;
+  return rest;
 }
 
 async function fieldList(env, u) {
@@ -438,7 +446,7 @@ async function fieldList(env, u) {
   const crew = await crewRows(env, all ? "job_id IN (SELECT id FROM jobs WHERE status = 'open')" : "agent_id = ? AND job_id IN (SELECT id FROM jobs WHERE status = 'open')", all ? [] : [u.id]);
   const jobIds = [...new Set(crew.map(c => c.job_id))];
   const jobs = jobIds.length ? await inChunks(env, 'SELECT id, vessel, port, eta, etb, etd, agent FROM jobs WHERE id IN', jobIds, 'ORDER BY eta') : [];
-  return json({ jobs, crew, now: now() });
+  return json({ jobs, crew: isOffice(u) ? crew : crew.map(fieldSafe), now: now() });
 }
 
 /* ---------- crew ---------- */
@@ -466,19 +474,26 @@ async function addCrew(req, env, u, jobId) {
   const list = Array.isArray(b.crew) ? b.crew : [b];
   if (!list.length || list.length > 60) throw new HttpError(400, 'จำนวนลูกเรือไม่ถูกต้อง');
   const settings = await loadSettings(env);
-  const ids = [];
-  for (const x of list) {
-    const name = str(x.name, 120);
-    if (!name) throw new HttpError(400, 'กรุณากรอกชื่อลูกเรือ');
+  const rows = list.map(x => {
+    const name = str(x && x.name, 120);
+    if (!name) throw new HttpError(400, 'กรุณากรอกชื่อลูกเรือให้ครบทุกคน');
     const type = x.type === 'off' ? 'off' : 'on';
     const tpl = type === 'on' ? settings.cp_on : settings.cp_off;
-    const chain = Math.min(tpl.length - 1, type === 'on' ? settings.cp_on_chain : settings.cp_off_chain);
-    const r = await env.DB.prepare('INSERT INTO crew (job_id, name, rank, type, nationality, flight, passport, agent_id, chain_end, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(jobId, name, str(x.rank, 40), type, str(x.nationality, 60), str(x.flight, 40), str(x.passport, 40), intOrNull(x.agent_id), chain, now()).run();
-    const cid = r.meta.last_row_id;
-    await env.DB.batch(tpl.map((cp, i) => env.DB.prepare('INSERT INTO checkpoints (crew_id, idx, name, name_en) VALUES (?, ?, ?, ?)').bind(cid, i, cp.th, cp.en)));
-    ids.push(cid);
+    return { name, type, tpl, agent: intOrNull(x.agent_id), chain: Math.min(tpl.length - 1, type === 'on' ? settings.cp_on_chain : settings.cp_off_chain), x };
+  });
+  const agents = [...new Set(rows.map(r => r.agent).filter(Boolean))];
+  for (const a of agents) if (!(await env.DB.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'field'").bind(a).first())) throw new HttpError(400, 'ไม่พบพนักงานผู้ดูแลที่เลือก');
+  const stmts = [];
+  const crewStmt = [];
+  const t = now();
+  for (const r of rows) {
+    crewStmt.push(stmts.length);
+    stmts.push(env.DB.prepare('INSERT INTO crew (job_id, name, rank, type, nationality, flight, passport, agent_id, chain_end, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(jobId, r.name, str(r.x.rank, 40), r.type, str(r.x.nationality, 60), str(r.x.flight, 40), str(r.x.passport, 40), r.agent, r.chain, t));
+    r.tpl.forEach((cp, i) => stmts.push(env.DB.prepare('INSERT INTO checkpoints (crew_id, idx, name, name_en) VALUES ((SELECT MAX(id) FROM crew WHERE job_id = ?), ?, ?, ?)').bind(jobId, i, cp.th, cp.en)));
   }
+  const res = await env.DB.batch(stmts);
+  const ids = crewStmt.map(k => res[k].meta.last_row_id);
   await log(env, jobId, u.id, list.length === 1 ? `เพิ่มลูกเรือ ${str(list[0].name, 120)}` : `เพิ่มลูกเรือ ${list.length} คน`);
   return json({ ids });
 }
@@ -562,7 +577,12 @@ async function putPlan(req, env, u, id) {
   const { results } = await env.DB.prepare('SELECT idx FROM checkpoints WHERE crew_id = ? ORDER BY idx').bind(id).all();
   if (b.plans.length !== results.length) throw new HttpError(400, 'จำนวนจุดไม่ตรงกับแผน');
   const plans = b.plans.map(ms);
-  for (let i = 1; i < plans.length; i++) if (plans[i] != null && plans[i - 1] != null && plans[i] < plans[i - 1]) throw new HttpError(400, `เวลาจุดที่ ${i + 1} ต้องไม่ก่อนจุดที่ ${i}`);
+  let prevAt = null, prevI = -1;
+  for (let i = 0; i < plans.length; i++) {
+    if (plans[i] == null) continue;
+    if (prevAt != null && plans[i] < prevAt) throw new HttpError(400, `เวลาจุดที่ ${i + 1} ต้องไม่ก่อนจุดที่ ${prevI + 1}`);
+    prevAt = plans[i]; prevI = i;
+  }
   await env.DB.batch([
     ...plans.map((v, i) => env.DB.prepare('UPDATE checkpoints SET plan_at = ? WHERE crew_id = ? AND idx = ?').bind(v, id, i)),
     env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) VALUES (?, ?, ?, ?, ?)').bind(c.job_id, now(), u.id, 'log', `ปรับแผนเวลา ${c.name}`)
@@ -580,10 +600,14 @@ async function confirm(req, env, u, id) {
   const next = cps.findIndex(x => x.actual_at == null);
   const t = now();
   let at = Number(b.at);
-  if (!Number.isFinite(at) || at > t + 120000 || at < t - 12 * 3600000) at = t;
+  const sentAt = Number(b.sent_at);
+  if (Number.isFinite(at) && Number.isFinite(sentAt)) {
+    const ago = Math.max(0, sentAt - at);
+    at = ago > 72 * 3600000 ? t : t - ago;
+  } else if (!Number.isFinite(at) || at > t + 120000 || at < t - 12 * 3600000) at = t;
   if (!Number.isInteger(idx) || idx < 0 || idx >= cps.length) throw new HttpError(400, 'จุดไม่ถูกต้อง');
   if (cps[idx].actual_at != null) {
-    if (Math.abs(cps[idx].actual_at - at) < 1000) return json({ ok: true, duplicate: true });
+    if (cps[idx].actual_by === u.id && Math.abs(cps[idx].actual_at - at) < 120000) return json({ ok: true, duplicate: true, at: cps[idx].actual_at });
     throw new HttpError(409, `จุด "${cps[idx].name}" ยืนยันไปแล้ว`);
   }
   if (idx !== next) throw new HttpError(409, `ต้องยืนยัน "${cps[next].name}" ก่อน`);
@@ -602,8 +626,10 @@ async function undo(req, env, u, id) {
   const c = await getCrew(env, id);
   canField(u, c);
   openJob(c);
+  const b = await readJson(req);
   const last = await env.DB.prepare('SELECT * FROM checkpoints WHERE crew_id = ? AND actual_at IS NOT NULL ORDER BY idx DESC LIMIT 1').bind(id).first();
   if (!last) throw new HttpError(409, 'ยังไม่มีจุดที่ยืนยัน');
+  if (b.idx !== undefined && Number(b.idx) !== last.idx) throw new HttpError(409, `ข้อมูลเปลี่ยนแล้ว จุดล่าสุดตอนนี้คือ "${last.name}" กรุณาตรวจอีกครั้ง`);
   await env.DB.batch([
     env.DB.prepare('UPDATE checkpoints SET actual_at = NULL, actual_by = NULL, lat = NULL, lng = NULL WHERE id = ?').bind(last.id),
     env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) VALUES (?, ?, ?, ?, ?)').bind(c.job_id, now(), u.id, 'log', `${c.name} · ย้อนกลับ "${last.name}"`)
@@ -669,6 +695,8 @@ async function getPhoto(env, u, id) {
 async function deletePhoto(env, u, id) {
   const p = await photoRow(env, u, id);
   if (!isOffice(u) && p.user_id !== u.id) throw new HttpError(403, 'ลบได้เฉพาะรูปที่ตัวเองแนบ');
+  const st = await env.DB.prepare('SELECT status FROM jobs WHERE id = ?').bind(p.job_id).first();
+  if (st.status !== 'open') throw new HttpError(409, 'งานนี้ปิดแล้ว แก้ไขไม่ได้');
   await env.FILES.delete(p.r2_key);
   await env.DB.prepare('DELETE FROM photos WHERE id = ?').bind(id).run();
   await log(env, p.job_id, u.id, 'ลบรูปที่แนบ', 'photo');
@@ -680,7 +708,7 @@ async function deletePhoto(env, u, id) {
 async function publicJob(env, token) {
   if (!/^[A-Za-z0-9_-]{16,40}$/.test(token)) throw new HttpError(404, 'Link not found');
   const j = await env.DB.prepare('SELECT * FROM jobs WHERE owner_token = ?').bind(token).first();
-  if (!j) throw new HttpError(404, 'Link not found or expired');
+  if (!j || (j.status === 'closed' && j.closed_at < now() - 30 * 86400000)) throw new HttpError(404, 'Link not found or expired');
   const settings = await loadSettings(env);
   const crew = await crewRows(env, 'job_id = ?', [j.id]);
   return json({
@@ -815,7 +843,7 @@ export async function daily(env, t = now()) {
   const stale = old.objects.map(o => o.key).filter(k => k < cutoff);
   if (stale.length) await env.FILES.delete(stale);
   const p = bkkParts(t);
-  if (p.d !== 1) return;
+  if (p.d > 7) return;
   const prev = p.m === 1 ? `${p.y - 1}-12` : `${p.y}-${String(p.m - 1).padStart(2, '0')}`;
   const key = `backups/${prev}.xlsx`;
   if (await env.FILES.head(key)) return;
