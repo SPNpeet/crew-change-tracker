@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Crew Change Tracker for Success Marine Service Co., Ltd.",
   "scripts": {
-    "dev": "wrangler dev --local --port 8787",
+    "dev": "wrangler dev --local --port 8787 --test-scheduled",
     "db:local": "wrangler d1 migrations apply cct --local",
     "db:remote": "wrangler d1 migrations apply cct --remote",
     "test": "node --test tests/api.test.mjs",

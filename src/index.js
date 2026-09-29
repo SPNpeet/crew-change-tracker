@@ -90,7 +90,7 @@ async function route(req, env, url) {
   if (p === '/api/settings' && m === 'PUT') return putSettings(req, env, u);
   if (p === '/api/export/all.xlsx' && m === 'GET') { requireOffice(u); return xlsxResponse(await allData(env), `crew-change-all-${fileDate()}.xlsx`); }
   if (p === '/api/backups' && m === 'GET') return listBackups(env, u);
-  if (seg[0] === 'backups' && seg[1] && m === 'GET') return getBackup(env, u, seg[1]);
+  if (seg[0] === 'backups' && seg[1] && m === 'GET') return getBackup(env, u, seg.slice(1).join('/'));
   throw new HttpError(404, 'ไม่พบรายการนี้');
 }
 
@@ -767,22 +767,53 @@ async function allData(env) {
   ];
 }
 
+export const DUMP_TABLES = ['users', 'settings', 'vehicles', 'hotels', 'jobs', 'crew', 'checkpoints', 'notes', 'photos', 'activity'];
+const DAILY_KEEP = 35;
+
 async function listBackups(env, u) {
   requireAdmin(u);
-  const list = await env.FILES.list({ prefix: 'backups/' });
-  return json({ backups: list.objects.map(o => ({ name: o.key.slice(8), size: o.size, uploaded: o.uploaded })).sort((a, b) => b.name.localeCompare(a.name)) });
+  const out = [];
+  let cursor;
+  do {
+    const list = await env.FILES.list({ prefix: 'backups/', cursor });
+    for (const o of list.objects) out.push({ name: o.key.slice(8), size: o.size, uploaded: o.uploaded });
+    cursor = list.truncated ? list.cursor : undefined;
+  } while (cursor);
+  return json({ backups: out.sort((a, b) => b.name.localeCompare(a.name)) });
 }
 
 async function getBackup(env, u, name) {
   requireAdmin(u);
-  if (!/^[0-9]{4}-[0-9]{2}\.xlsx$/.test(name)) throw new HttpError(404, 'ไม่พบไฟล์สำรอง');
+  const monthly = /^[0-9]{4}-[0-9]{2}\.xlsx$/.test(name);
+  const nightly = /^daily\/[0-9]{4}-[0-9]{2}-[0-9]{2}\.json\.gz$/.test(name);
+  if (!monthly && !nightly) throw new HttpError(404, 'ไม่พบไฟล์สำรอง');
   const obj = await env.FILES.get('backups/' + name);
   if (!obj) throw new HttpError(404, 'ไม่พบไฟล์สำรอง');
-  return new Response(obj.body, { headers: { 'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'content-disposition': `attachment; filename="crew-change-backup-${name}"` } });
+  const type = monthly ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/gzip';
+  return new Response(obj.body, { headers: { 'content-type': type, 'content-disposition': `attachment; filename="crew-change-backup-${name.replace('daily/', '')}"`, 'cache-control': 'no-store' } });
 }
+
+export async function dumpAll(env) {
+  const tables = {};
+  for (const t of DUMP_TABLES) tables[t] = (await env.DB.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()).results;
+  return { format: 'cct-backup', version: 1, created: now(), tables };
+}
+
+async function gzip(textValue) {
+  const stream = new Blob([textValue]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+const dayKey = t => { const p = bkkParts(t); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
 
 export async function daily(env, t = now()) {
   await env.DB.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(t).run();
+  const nightly = `backups/daily/${dayKey(t)}.json.gz`;
+  await env.FILES.put(nightly, await gzip(JSON.stringify(await dumpAll(env))), { httpMetadata: { contentType: 'application/gzip' } });
+  const cutoff = `backups/daily/${dayKey(t - DAILY_KEEP * 86400000)}.json.gz`;
+  const old = await env.FILES.list({ prefix: 'backups/daily/' });
+  const stale = old.objects.map(o => o.key).filter(k => k < cutoff);
+  if (stale.length) await env.FILES.delete(stale);
   const p = bkkParts(t);
   if (p.d !== 1) return;
   const prev = p.m === 1 ? `${p.y - 1}-12` : `${p.y}-${String(p.m - 1).padStart(2, '0')}`;

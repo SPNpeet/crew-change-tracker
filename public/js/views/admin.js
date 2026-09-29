@@ -69,11 +69,17 @@ export async function enter(r, alive) {
   if (tab === 'backup') {
     const d = await api('GET', '/api/backups');
     if (!alive()) return;
+    const monthly = d.backups.filter(b => !b.name.startsWith('daily/'));
+    const nightly = d.backups.filter(b => b.name.startsWith('daily/'));
+    const table = (list, label) => list.length ? `<div class="scroll"><table class="t nw"><thead><tr><th>${label}</th><th>ขนาด</th><th>สร้างเมื่อ</th><th></th></tr></thead><tbody>${list.map(b => `<tr><td class="nm">${esc(b.name.replace('daily/', '').replace(/\.(xlsx|json\.gz)$/, ''))}</td><td>${Math.max(1, Math.round(b.size / 1024))} KB</td><td>${fmtFull(Date.parse(b.uploaded))}</td><td class="acts"><a class="btn line sm" href="/api/backups/${b.name.split('/').map(encodeURIComponent).join('/')}" download>${icon('download')}ดาวน์โหลด</a></td></tr>`).join('')}</tbody></table></div>` : '';
     el().className = 'stack';
     el().innerHTML = `<div class="card"><div class="card-h"><h3>ดาวน์โหลดข้อมูลทั้งหมดตอนนี้</h3></div><div class="card-b"><p class="muted s14" style="margin-top:0">ไฟล์ Excel รวมงาน ลูกเรือ Time log ความเคลื่อนไหว ผู้ใช้ รถ และโรงแรม</p><a class="btn" href="/api/export/all.xlsx" download>${icon('download')}ดาวน์โหลด Excel ทั้งระบบ</a></div></div>
-      <div class="card"><div class="card-h"><h3>ไฟล์สำรองรายเดือน</h3><span class="sub">ระบบสร้างให้อัตโนมัติทุกวันที่ 1 ของเดือน</span></div>
-      ${d.backups.length ? `<div class="scroll"><table class="t"><thead><tr><th>เดือน</th><th>ขนาด</th><th>สร้างเมื่อ</th><th></th></tr></thead><tbody>${d.backups.map(b => `<tr><td class="nm">${esc(b.name.replace('.xlsx', ''))}</td><td>${Math.max(1, Math.round(b.size / 1024))} KB</td><td>${fmtFull(Date.parse(b.uploaded))}</td><td class="acts"><a class="btn line sm" href="/api/backups/${encodeURIComponent(b.name)}" download>${icon('download')}ดาวน์โหลด</a></td></tr>`).join('')}</tbody></table></div>` : '<div class="card-b muted">ยังไม่มีไฟล์สำรอง ไฟล์แรกจะถูกสร้างในวันที่ 1 ของเดือนถัดไป</div>'}</div>
-      <p class="muted s13">นอกจากไฟล์ Excel รายเดือน ฐานข้อมูลยังสำรองอัตโนมัติ กู้คืนย้อนหลังได้ 30 วัน (ติดต่อผู้ดูแลระบบ)</p>`;
+      <div class="card"><div class="card-h"><h3>สำรองทั้งระบบทุกคืน</h3><span class="sub">02:00 ทุกคืน · เก็บย้อนหลัง 35 วัน · ใช้กู้ระบบได้ทั้งหมด</span></div>
+        ${table(nightly.slice(0, 7), 'วันที่') || '<div class="card-b muted">ไฟล์แรกจะถูกสร้างคืนนี้เวลา 02:00</div>'}
+        <div class="card-b muted s13">ไฟล์ทุกคืนและรูปถ่ายทั้งหมด ถูกดึงไปเก็บที่ NAS ของบริษัทอัตโนมัติ (ตั้งค่าครั้งเดียวที่ NAS ตามคู่มือหัวข้อสำรองข้อมูล)</div></div>
+      <div class="card"><div class="card-h"><h3>ไฟล์ Excel รายเดือน</h3><span class="sub">สร้างให้อัตโนมัติทุกวันที่ 1 ของเดือน</span></div>
+        ${table(monthly, 'เดือน') || '<div class="card-b muted">ยังไม่มีไฟล์ ไฟล์แรกจะถูกสร้างในวันที่ 1 ของเดือนถัดไป</div>'}</div>
+      <p class="muted s13">ฐานข้อมูลยังสำรองอัตโนมัติอีกชั้น กู้คืนย้อนหลังได้ 30 วัน (ติดต่อผู้พัฒนา)</p>`;
   }
 }
 

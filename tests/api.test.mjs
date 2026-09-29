@@ -1,7 +1,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -241,6 +242,29 @@ test('monthly backup is written on the 1st (Bangkok time)', async () => {
   const f = await admin('GET', '/api/backups/2026-09.xlsx');
   assert.equal(f.status, 200);
   assert.equal((await office('GET', '/api/backups')).status, 403);
+  assert.ok(list.some(b => b.name === 'daily/2026-10-01.json.gz'), 'nightly full backup written');
+});
+
+test('nightly backup restores into an empty database with identical data', async () => {
+  const f = await admin('GET', '/api/backups/daily/2026-10-01.json.gz');
+  assert.equal(f.status, 200);
+  const dir = mkdtempSync(join(tmpdir(), 'cct-restore-'));
+  const gz = join(dir, 'b.json.gz'), sql = join(dir, 'r.sql'), db = join(dir, 'db');
+  writeFileSync(gz, f.data);
+  const sh = { stdio: 'pipe', shell: process.platform === 'win32' };
+  execFileSync('node', ['scripts/backup-to-sql.mjs', gz, sql], sh);
+  execFileSync(WR, ['wrangler', 'd1', 'migrations', 'apply', 'cct', '--local', '--persist-to', db], sh);
+  execFileSync(WR, ['wrangler', 'd1', 'execute', 'cct', '--local', '--persist-to', db, '--file', sql], sh);
+  const count = where => { const out = execFileSync(WR, ['wrangler', 'd1', 'execute', 'cct', '--local', '--persist-to', where, '--json', '--command', `"SELECT (SELECT COUNT(*) FROM users) u, (SELECT COUNT(*) FROM jobs) j, (SELECT COUNT(*) FROM crew) c, (SELECT COUNT(*) FROM checkpoints) k, (SELECT COUNT(*) FROM notes) n, (SELECT COUNT(*) FROM photos) p, (SELECT COUNT(*) FROM activity) a, (SELECT SUM(actual_at) FROM checkpoints) s"`], sh).toString(); return JSON.parse(out.slice(out.indexOf('[')))[0].results[0]; };
+  const restored = count(db);
+  const live = JSON.parse(Buffer.from(gunzipSync(f.data)).toString('utf8')).tables;
+  assert.equal(restored.u, live.users.length);
+  assert.equal(restored.c, live.crew.length);
+  assert.equal(restored.k, live.checkpoints.length);
+  assert.equal(restored.a, live.activity.length);
+  assert.equal(restored.s, live.checkpoints.reduce((x, r) => x + (r.actual_at || 0), 0));
+  assert.ok(restored.j >= 1 && restored.p >= 1 && restored.n >= 1, 'jobs, photos and notes restored');
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test('password change signs out other sessions', async () => {
