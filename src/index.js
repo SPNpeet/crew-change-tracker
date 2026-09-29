@@ -663,7 +663,7 @@ async function getPhoto(env, u, id) {
   const p = await photoRow(env, u, id);
   const obj = await env.FILES.get(p.r2_key);
   if (!obj) throw new HttpError(404, 'ไม่พบไฟล์รูป');
-  return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType || 'image/jpeg', 'cache-control': 'private, max-age=86400' } });
+  return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType || 'image/jpeg', 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'" } });
 }
 
 async function deletePhoto(env, u, id) {
