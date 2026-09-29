@@ -207,3 +207,5 @@ table.rp-t th { font-size:12px; }
   .cp-row .iconbtn { align-self:start; }
 }
 .pgrid span { font-size:12px; }
+table.rp-t td { white-space:nowrap; }
+table.rp-t td.w { white-space:normal; }
