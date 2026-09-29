@@ -1,8 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "crew-change-tracker",
+  "account_id": "5932fbb0a7eb69045d6500f82a643836",
   "main": "src/index.js",
   "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
@@ -13,7 +16,7 @@
     {
       "binding": "DB",
       "database_name": "cct",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "c8e0dde9-9795-45e8-9268-e2609ef58001",
       "migrations_dir": "migrations"
     }
   ],
