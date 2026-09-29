@@ -1,0 +1,140 @@
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'office', 'field')),
+  see_all INTEGER NOT NULL DEFAULT 0,
+  title TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  id_card TEXT NOT NULL DEFAULT '',
+  pw_hash TEXT NOT NULL,
+  pw_salt TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  failed INTEGER NOT NULL DEFAULT 0,
+  locked_until INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX sessions_user ON sessions(user_id);
+
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE vehicles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  plate TEXT NOT NULL DEFAULT '',
+  driver TEXT NOT NULL DEFAULT '',
+  driver_en TEXT NOT NULL DEFAULT '',
+  driver_id TEXT NOT NULL DEFAULT '',
+  driver_phone TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE hotels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  phone TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  vessel TEXT NOT NULL,
+  port TEXT NOT NULL DEFAULT '',
+  owner TEXT NOT NULL DEFAULT '',
+  owner_email TEXT NOT NULL DEFAULT '',
+  agent TEXT NOT NULL DEFAULT '',
+  agent_email TEXT NOT NULL DEFAULT '',
+  eta INTEGER,
+  etb INTEGER,
+  etd INTEGER,
+  imm_deadline INTEGER,
+  services TEXT NOT NULL DEFAULT '["Crew change"]',
+  steps TEXT NOT NULL DEFAULT '[0,0,0,0,0,0,0,0,0]',
+  sent TEXT NOT NULL DEFAULT '{}',
+  remark TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+  owner_token TEXT NOT NULL UNIQUE,
+  created_by INTEGER REFERENCES users(id),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  closed_at INTEGER
+);
+CREATE INDEX jobs_status ON jobs(status, eta);
+
+CREATE TABLE crew (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  rank TEXT NOT NULL DEFAULT '',
+  type TEXT NOT NULL CHECK (type IN ('on', 'off')),
+  nationality TEXT NOT NULL DEFAULT '',
+  flight TEXT NOT NULL DEFAULT '',
+  passport TEXT NOT NULL DEFAULT '',
+  docs TEXT NOT NULL DEFAULT '{}',
+  s4 TEXT NOT NULL DEFAULT '{}',
+  vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE SET NULL,
+  hotel_id INTEGER REFERENCES hotels(id) ON DELETE SET NULL,
+  room TEXT NOT NULL DEFAULT '',
+  agent_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  chain_end INTEGER NOT NULL DEFAULT 0,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX crew_job ON crew(job_id);
+CREATE INDEX crew_agent ON crew(agent_id);
+
+CREATE TABLE checkpoints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  crew_id INTEGER NOT NULL REFERENCES crew(id) ON DELETE CASCADE,
+  idx INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  name_en TEXT NOT NULL,
+  plan_at INTEGER,
+  actual_at INTEGER,
+  actual_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  lat REAL,
+  lng REAL,
+  UNIQUE (crew_id, idx)
+);
+
+CREATE TABLE notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  crew_id INTEGER NOT NULL REFERENCES crew(id) ON DELETE CASCADE,
+  at INTEGER NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  text TEXT NOT NULL
+);
+CREATE INDEX notes_crew ON notes(crew_id);
+
+CREATE TABLE photos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  crew_id INTEGER NOT NULL REFERENCES crew(id) ON DELETE CASCADE,
+  point TEXT NOT NULL DEFAULT '',
+  r2_key TEXT NOT NULL UNIQUE,
+  size INTEGER NOT NULL,
+  lat REAL,
+  lng REAL,
+  at INTEGER NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX photos_crew ON photos(crew_id);
+
+CREATE TABLE activity (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  at INTEGER NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL DEFAULT 'log',
+  text TEXT NOT NULL
+);
+CREATE INDEX activity_job ON activity(job_id, at);
