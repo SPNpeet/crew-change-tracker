@@ -1,4 +1,5 @@
 import { parseJson } from './util.js';
+import { DEFAULT_TPL } from '../public/js/core.js';
 
 export const DEFAULTS = {
   company: {
@@ -31,7 +32,8 @@ export const DEFAULTS = {
     { th: 'เช็คอินสายการบิน', en: 'Checked in at airport', gap: 60 },
     { th: 'เครื่องออก', en: 'Departed', gap: 120 }
   ],
-  cp_off_chain: 3
+  cp_off_chain: 3,
+  mail_tpl: DEFAULT_TPL
 };
 
 export const EDITABLE = Object.keys(DEFAULTS);

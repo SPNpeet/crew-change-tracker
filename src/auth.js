@@ -4,6 +4,7 @@ const ITER = 100000;
 const SESSION_DAYS = 60;
 const MAX_FAILED = 8;
 const LOCK_MS = 15 * 60000;
+const DENIED = `ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง (ใส่ผิด ${MAX_FAILED} ครั้งติดกัน บัญชีจะถูกล็อก ${LOCK_MS / 60000} นาที)`;
 export const COOKIE = 'cct_s';
 
 export async function hashPassword(password, saltB64) {
@@ -42,20 +43,15 @@ export function sessionCookie(token, secure) {
 export async function login(env, username, password) {
   const u = await env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(String(username || '').trim()).first();
   const t = now();
-  if (!u || !u.active) {
+  if (!u || !u.active || u.locked_until > t) {
     await hashPassword(String(password || 'x'));
-    throw new HttpError(401, 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
-  }
-  if (u.locked_until > t) {
-    const min = Math.ceil((u.locked_until - t) / 60000);
-    throw new HttpError(429, `ใส่รหัสผิดหลายครั้ง กรุณารอ ${min} นาทีแล้วลองใหม่`);
+    throw new HttpError(401, DENIED);
   }
   const { hash } = await hashPassword(String(password || ''), u.pw_salt);
   if (!sameBytes(hash, u.pw_hash)) {
     const row = await env.DB.prepare('UPDATE users SET failed = failed + 1 WHERE id = ? RETURNING failed').bind(u.id).first();
-    const locked = row.failed >= MAX_FAILED;
-    if (locked) await env.DB.prepare('UPDATE users SET failed = 0, locked_until = ? WHERE id = ?').bind(t + LOCK_MS, u.id).run();
-    throw new HttpError(401, locked ? 'ใส่รหัสผิดหลายครั้ง ระบบล็อกบัญชีนี้ไว้ 15 นาที' : 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+    if (row.failed >= MAX_FAILED) await env.DB.prepare('UPDATE users SET failed = 0, locked_until = ? WHERE id = ?').bind(t + LOCK_MS, u.id).run();
+    throw new HttpError(401, DENIED);
   }
   const token = randomId(32);
   await env.DB.batch([

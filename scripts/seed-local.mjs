@@ -1,6 +1,6 @@
 const BASE = process.env.BASE || 'http://127.0.0.1:8787';
 if (!/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(BASE)) throw new Error('seed-local only runs against a local dev server');
-const [user, pass] = [process.env.ADMIN_USER || 'jeerawan', process.env.ADMIN_PASS];
+const [user, pass] = [process.env.ADMIN_USER || 'somying', process.env.ADMIN_PASS];
 if (!pass) throw new Error('set ADMIN_PASS');
 
 let cookie = '';
@@ -20,7 +20,7 @@ const mk = async u => { try { return (await call('POST', '/api/users', { passwor
 const somsak = await mk({ username: 'somsak', name: 'สมศักดิ์', role: 'field', title: 'Boarding agent · สนามบิน', phone: '081-000-1001', id_card: '3-1001-00000-00-1' });
 const wichai = await mk({ username: 'wichai', name: 'วิชัย', role: 'field', title: 'Boarding agent · ท่าเรือ', phone: '081-000-1002', id_card: '3-1002-00000-00-2' });
 await mk({ username: 'napa', name: 'นภา', role: 'field', see_all: true, title: 'หัวหน้างานภาคสนาม' });
-await mk({ username: 'may', name: 'เมย์', role: 'office', title: 'Operation' });
+await mk({ username: 'pranee', name: 'ปราณี', role: 'office', title: 'Operation' });
 const v1 = (await call('POST', '/api/vehicles', { name: 'รถตู้ 1', plate: 'ฮข 1234', driver: 'คุณประเสริฐ', driver_en: 'Prasert', driver_id: '3-2002-00000-00-1', driver_phone: '089-000-2002' })).id;
 const v2 = (await call('POST', '/api/vehicles', { name: 'รถตู้ 2', plate: 'กท 5678', driver: 'คุณวีระ', driver_en: 'Weera', driver_id: '3-2003-00000-00-2', driver_phone: '089-000-2003' })).id;
 const h1 = (await call('POST', '/api/hotels', { name: 'Harbour View Hotel ศรีราชา', phone: '038-000-000' })).id;

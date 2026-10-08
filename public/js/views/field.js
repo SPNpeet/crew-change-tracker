@@ -1,5 +1,5 @@
-import { A, go } from '../app.js';
-import { api, confirmPoint, pendingFor, flushOutbox } from '../api.js';
+import { A, go, flushPending } from '../app.js';
+import { api, confirmPoint, uploadPhoto, pendingFor } from '../api.js';
 import { esc, hm, dhm, fmtD, avatar, pill, nextIdx, status, planCell, expected, doneCount, MIN } from '../core.js';
 import { icon, toast, openLb, stampPhoto, getGps } from '../ui.js';
 import { roleLabel } from './auth.js';
@@ -18,7 +18,7 @@ function overlay() {
 }
 
 async function load() {
-  await flushOutbox(A.me.id).catch(() => 0);
+  await flushPending().catch(() => false);
   F = await api('GET', '/api/field');
   overlay();
 }
@@ -37,7 +37,11 @@ export async function poll() {
 
 function render(keep) {
   const y = window.scrollY;
+  const old = keep && document.getElementById('noteedit');
+  const draft = old && !old.hidden ? old.querySelector('textarea').value : null;
   app().innerHTML = `<div class="fieldpage">${A.route.name === 'crew' ? detail(A.route.params.crew) : list()}</div>`;
+  const box = draft != null && document.getElementById('noteedit');
+  if (box) { box.hidden = false; box.querySelector('textarea').value = draft; }
   if (keep) window.scrollTo(0, y);
 }
 
@@ -115,7 +119,7 @@ export const actions = {
     const c = crewOf(t.dataset.id), idx = +t.dataset.idx;
     const gps = await Promise.race([getGps(), new Promise(r => setTimeout(() => r(null), 1500))]);
     try {
-      const r = await confirmPoint(c.id, idx, gps ? { lat: gps.lat, lng: gps.lng } : {}, A.me.id);
+      const r = await confirmPoint(c.id, idx, { ...(gps ? { lat: gps.lat, lng: gps.lng } : {}), label: `"${c.cps[idx].name}" ของ ${c.name}` }, A.me.id);
       c.cps[idx].actual = r.at;
       if (r.queued) { c.cps[idx].pending = true; toast(`ไม่มีสัญญาณ บันทึกเวลา ${hm(r.at)} ไว้ในเครื่องแล้ว ระบบส่งเองเมื่อมีสัญญาณ`, 4000); }
       else toast(`บันทึก "${c.cps[idx].name}" เวลา ${hm(r.at)} แล้ว สำนักงานเห็นทันที`);
@@ -156,9 +160,9 @@ export const changes = {
     try {
       out = await stampPhoto(file, { point: t.dataset.point, name: c.name, rank: c.rank, vessel: job.vessel || '', company: A.settings.company.name });
     } catch (e) { return toast('เปิดไฟล์รูปนี้ไม่ได้'); }
-    const q = new URLSearchParams({ point: t.dataset.point });
-    if (out.gps) { q.set('lat', out.gps.lat.toFixed(6)); q.set('lng', out.gps.lng.toFixed(6)); }
-    await api('POST', `/api/crew/${c.id}/photos?${q}`, out.blob);
+    const point = t.dataset.point;
+    const r = await uploadPhoto(c.id, out.blob, { point, lat: out.gps ? out.gps.lat.toFixed(6) : null, lng: out.gps ? out.gps.lng.toFixed(6) : null, label: `"${point}" ของ ${c.name}` }, A.me.id);
+    if (r.queued) return toast('ไม่มีสัญญาณ เก็บรูปไว้ในเครื่องแล้ว ระบบส่งเองเมื่อมีสัญญาณ', 4000);
     toast(out.gps ? 'บันทึกรูปพร้อมเวลาและพิกัดแล้ว' : 'บันทึกรูปพร้อมเวลาแล้ว (ไม่ได้เปิด GPS)');
     await poll();
   }
@@ -176,6 +180,8 @@ document.addEventListener('submit', async e => {
     await api('POST', `/api/crew/${c.id}/notes`, { text });
     toast('บันทึกหมายเหตุแล้ว');
     document.activeElement.blur();
+    e.target.reset();
+    e.target.hidden = true;
     await poll();
   } catch (x) { toast(x.message); btn.disabled = false; }
 });

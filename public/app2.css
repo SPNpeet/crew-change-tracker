@@ -210,3 +210,17 @@ table.rp-t th { font-size:12px; }
 table.rp-t td { white-space:nowrap; }
 table.rp-t td.w { white-space:normal; }
 .warnbox .linkbtn { min-height:36px; }
+.tpl-list { gap:10px; }
+details.tpl { border:1px solid var(--line); border-radius:var(--r); background:#fff; }
+details.tpl > summary { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; min-height:48px; cursor:pointer; list-style:none; }
+details.tpl > summary::-webkit-details-marker { display:none; }
+details.tpl > summary::before { content:""; width:7px; height:7px; border-right:2px solid var(--muted); border-bottom:2px solid var(--muted); transform:rotate(-45deg); transition:transform .15s; flex:none; }
+details.tpl[open] > summary::before { transform:rotate(45deg); }
+details.tpl[open] > summary { border-bottom:1px solid var(--line); }
+.tpl-b { display:grid; gap:12px; padding:14px; }
+.tpl-b textarea.mail { min-height:330px; }
+.tpl-vars { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr)); gap:4px 16px; font-size:13px; color:var(--ink2); }
+.tpl-vars div { display:flex; gap:8px; align-items:baseline; min-width:0; }
+.tpl-vars code { font-family:ui-monospace,monospace; font-size:12.5px; color:var(--brand); background:var(--brand-50); border-radius:6px; padding:1px 6px; white-space:nowrap; }
+.tpl-prev { background:var(--line2); border-radius:var(--r-sm); padding:10px 12px; }
+.tpl-prev pre { margin:6px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; font-family:"IBM Plex Sans Thai",ui-monospace,monospace; font-size:13.5px; line-height:1.55; max-height:320px; overflow:auto; }

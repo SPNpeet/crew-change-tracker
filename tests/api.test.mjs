@@ -72,7 +72,7 @@ test('writes without the app header or from another origin are refused', async (
 });
 
 test('admin creates users; the 15 account limit is enforced', async () => {
-  let r = await admin('POST', '/api/users', { username: 'office1', name: 'คุณจีรวรรณ', role: 'office', password: 'office12345' });
+  let r = await admin('POST', '/api/users', { username: 'office1', name: 'คุณปราณี', role: 'office', password: 'office12345' });
   assert.equal(r.status, 200);
   r = await admin('POST', '/api/users', { username: 'somsak', name: 'สมศักดิ์', role: 'field', title: 'Boarding agent', id_card: '3-1001-00000-00-0', password: 'field12345' });
   S.somsak = r.data.id;
@@ -97,8 +97,21 @@ test('login, wrong password, lockout', async () => {
   const bad = client();
   for (let i = 0; i < 7; i++) assert.equal((await bad('POST', '/api/login', { username: 'user1', password: 'nope' })).status, 401);
   assert.equal((await bad('POST', '/api/login', { username: 'user1', password: 'nope' })).status, 401);
-  assert.equal((await bad('POST', '/api/login', { username: 'user1', password: 'field12345' })).status, 429);
+  const locked = await bad('POST', '/api/login', { username: 'user1', password: 'field12345' });
+  assert.equal(locked.status, 401, 'a locked account refuses the correct password');
+  assert.equal(locked.headers.get('set-cookie'), null);
   assert.equal((await anon('GET', '/api/me')).status, 401);
+});
+
+test('a locked account answers exactly like an unknown username', async () => {
+  const unknown = await anon('POST', '/api/login', { username: 'no-such-user', password: 'field12345' });
+  const wrong = await anon('POST', '/api/login', { username: 'user2', password: 'nope' });
+  const locked = await anon('POST', '/api/login', { username: 'user1', password: 'field12345' });
+  assert.equal(unknown.status, 401);
+  assert.deepEqual([wrong.status, wrong.data], [unknown.status, unknown.data]);
+  assert.deepEqual([locked.status, locked.data], [unknown.status, unknown.data]);
+  const u1 = (await admin('GET', '/api/users')).data.users.find(x => x.username === 'user1');
+  assert.equal(u1.locked, true, 'the admin still sees the lock');
 });
 
 test('field staff cannot use office or admin functions', async () => {
@@ -227,6 +240,20 @@ test('photos upload, view by allowed users only, size and type checks', async ()
   assert.equal((await field2('DELETE', `/api/photos/${S.photo}`)).status, 403);
 });
 
+test('a photo sent later keeps the time it was taken, corrected for the phone clock', async () => {
+  const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 5, 6, 0xff, 0xd9]);
+  const realNow = Date.now();
+  const deviceNow = realNow - 30 * 60000;
+  const send = q => field('POST', `/api/crew/${S.c1}/photos?point=${encodeURIComponent('ถึงโรงแรม')}&${q}`, jpg, { headers: { 'content-type': 'image/jpeg' } });
+  const late = await send(`at=${deviceNow - 40 * 60000}&sent_at=${deviceNow}`);
+  const plain = await send('lat=13.2&lng=100.8');
+  assert.equal(late.status, 200);
+  assert.equal(plain.status, 200);
+  const photos = (await office('GET', `/api/jobs/${S.job}`)).data.crew.find(x => x.id === S.c1).photos;
+  assert.ok(Math.abs(photos.find(p => p.id === late.data.id).at - (realNow - 40 * 60000)) < 5000, 'queued photo keeps its own time');
+  assert.ok(Math.abs(photos.find(p => p.id === plain.data.id).at - Date.now()) < 5000, 'without a time the server time is used');
+});
+
 test('owner link shows status only, without personal data', async () => {
   const full = (await office('GET', `/api/jobs/${S.job}`)).data;
   assert.ok(full.job.owner_token);
@@ -252,6 +279,28 @@ test('excel exports are valid xlsx files', async () => {
   r = await office('GET', '/api/export/all.xlsx');
   assert.equal(r.status, 200);
   assert.equal((await field('GET', `/api/jobs/${S.job}/export.xlsx`)).status, 403);
+});
+
+test('email templates are editable by the admin only', async () => {
+  const def = (await admin('GET', '/api/me')).data.settings.mail_tpl;
+  assert.deepEqual(Object.keys(def).sort(), ['appoint', 'gate', 'morning', 'night', 'plan', 'sched', 'update']);
+  assert.ok(def.appoint.includes('{{services_line}}') && def.morning.includes('MORNING UPDATE'));
+  const mine = { ...def, appoint: 'Subject: TEMPLATE-CHANGED {{vessel}}\r\n\r\n{{signature}}' };
+  let r = await admin('PUT', '/api/settings', { mail_tpl: mine });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.settings.mail_tpl.appoint, 'Subject: TEMPLATE-CHANGED {{vessel}}\n\n{{signature}}');
+  assert.equal((await office('GET', '/api/me')).data.settings.mail_tpl.appoint, r.data.settings.mail_tpl.appoint);
+  const { night, ...missing } = def;
+  assert.equal((await admin('PUT', '/api/settings', { mail_tpl: missing })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { mail_tpl: { ...def, night: 5 } })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { mail_tpl: { ...def, extra: 'x' } })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { mail_tpl: { ...def, gate: 'x'.repeat(4001) } })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { mail_tpl: { ...def, gate: '  ' } })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { mail_tpl: 'text' })).status, 400);
+  assert.equal((await field('PUT', '/api/settings', { mail_tpl: def })).status, 403);
+  assert.equal((await office('PUT', '/api/settings', { mail_tpl: def })).status, 403);
+  assert.equal((await admin('GET', '/api/me')).data.settings.mail_tpl.appoint, r.data.settings.mail_tpl.appoint, 'refused writes change nothing');
+  assert.deepEqual((await admin('PUT', '/api/settings', { mail_tpl: def })).data.settings.mail_tpl, def);
 });
 
 test('settings validation and closing a job', async () => {

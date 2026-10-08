@@ -41,7 +41,7 @@ export async function enter(r, alive) {
 }
 
 export async function poll(r) {
-  if (r.name !== 'job' || A.ui.mailEdited) return;
+  if (r.name !== 'job') return;
   await load(r.params.id);
   if (A.route.name === 'job' && A.route.params.id === J.job.id) render(true);
 }
@@ -55,11 +55,14 @@ async function refresh(msg) {
 function render(keepScroll) {
   const y = window.scrollY;
   const k = A.route.params.step;
+  const old = A.ui.mailEdited && app().querySelector('textarea.mail');
+  const draft = old ? old.value : null;
   app().innerHTML = `<div class="office">${side(k)}<section>${head(k)}${body(k, Date.now())}</section></div>`;
   if (keepScroll) window.scrollTo(0, y);
   const cur = app().querySelector('.steplist [aria-current="true"]'), sl = app().querySelector('.steplist');
   if (cur && sl.scrollWidth > sl.clientWidth) sl.scrollLeft += cur.getBoundingClientRect().left - sl.getBoundingClientRect().left - (sl.clientWidth - cur.offsetWidth) / 2;
   const ta = app().querySelector('textarea.mail');
+  if (ta && draft != null) ta.value = draft;
   if (ta) ta.addEventListener('input', () => { A.ui.mailEdited = true; }, { once: true });
 }
 

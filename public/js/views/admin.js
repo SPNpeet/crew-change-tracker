@@ -1,12 +1,46 @@
 import { A, go, reloadRefs } from '../app.js';
 import { api } from '../api.js';
-import { esc, fmtFull } from '../core.js';
+import { esc, fmtFull, mail, DEFAULT_TPL } from '../core.js';
 import { icon, toast, openDialog, dlgHead, dlgFoot } from '../ui.js';
 import { roleLabel } from './auth.js';
 
 const app = () => document.getElementById('app');
 const TABS = [['users', 'ผู้ใช้งาน'], ['vehicles', 'รถและคนขับ'], ['hotels', 'โรงแรม'], ['points', 'จุดสถานะ'], ['general', 'ตั้งค่าทั่วไป'], ['backup', 'สำรองข้อมูล']];
 let USERS = [];
+let PREVIEW = null;
+
+const MAIL_KINDS = [
+  ['appoint', 'แจ้ง Local Agent รับแต่งตั้ง', 'ขั้นตอนที่ 3', ['to', 'services_line', 'vessel', 'PORT', 'port', 'agent', 'owner', 'services', 'on', 'off', 'signature']],
+  ['sched', 'อัปเดตตารางเรือ', 'ขั้นตอนที่ 2', ['to', 'vessel', 'owner', 'port', 'eta', 'etb', 'etd', 'signature']],
+  ['gate', 'GATE PERMISSION', 'ขั้นตอนที่ 6', ['to', 'vessel', 'PORT', 'etb_date', 'agent', 'gate_lines', 'signature']],
+  ['plan', 'แผนส่ง Owner', 'ขั้นตอนที่ 5', ['to', 'vessel', 'owner', 'port', 'plan_rows', 'signature']],
+  ['night', 'สรุปแผนคืนนี้', 'ขั้นตอนที่ 8', ['to', 'vessel', 'time', 'owner', 'port', 'status_lines', 'night_plan', 'signature']],
+  ['morning', 'สรุปผลเช้านี้', 'ขั้นตอนที่ 8', ['to', 'vessel', 'owner', 'morning_done', 'status_lines', 'signature']],
+  ['update', 'อัปเดตสถานะตอนนี้', 'ขั้นตอนที่ 8', ['to', 'vessel', 'time', 'owner', 'status_lines', 'signature']]
+];
+const VAR_TH = {
+  to: 'บรรทัด To: อีเมลผู้รับ (ไม่มีอีเมลจะว่าง)',
+  vessel: 'ชื่อเรือ',
+  port: 'ท่าเรือ',
+  PORT: 'ท่าเรือ ตัวพิมพ์ใหญ่',
+  owner: 'ชื่อ Owner',
+  agent: 'ชื่อ Local agent',
+  services: 'เรื่องที่ได้รับแต่งตั้ง บรรทัดละเรื่อง',
+  services_line: 'เรื่องที่ได้รับแต่งตั้ง ในบรรทัดเดียว ตัวพิมพ์ใหญ่',
+  on: 'จำนวน On signer',
+  off: 'จำนวน Off signer',
+  eta: 'วันเวลา ETA',
+  etb: 'วันเวลา ETB',
+  etd: 'วันเวลา ETD',
+  etb_date: 'วันที่ ETB ขึ้นต้นด้วย " / " (ยังไม่มี ETB จะว่าง)',
+  gate_lines: 'รายชื่อลูกเรือ ผู้ดูแล และคนขับ',
+  plan_rows: 'แผนเวลาของลูกเรือทุกคน',
+  status_lines: 'สถานะล่าสุดของลูกเรือทุกคน',
+  night_plan: 'จุดที่จะถึงใน 12 ชม. ข้างหน้า',
+  morning_done: 'จุดที่ผ่านแล้วใน 12 ชม. ที่ผ่านมา',
+  time: 'เวลาตอนสร้างร่าง (ชม.:นาที)',
+  signature: 'ลายเซ็นท้ายอีเมล'
+};
 
 export async function enter(r, alive) {
   const tab = r.params.tab;
@@ -52,7 +86,9 @@ export async function enter(r, alive) {
   }
   if (tab === 'general') {
     const s = A.settings;
-    el().className = '';
+    const tpl = { ...DEFAULT_TPL, ...s.mail_tpl };
+    PREVIEW = null;
+    el().className = 'stack';
     el().innerHTML = `<form id="genform" class="card"><div class="card-h"><h3>ตั้งค่าทั่วไป</h3></div><div class="card-b form">
       <label class="f">ชื่อบริษัท (ไทย)<input name="name_th" value="${esc(s.company.name_th)}" maxlength="120"></label>
       <label class="f">ชื่อบริษัท (อังกฤษ)<input name="name" value="${esc(s.company.name)}" maxlength="120"></label>
@@ -63,7 +99,18 @@ export async function enter(r, alive) {
       <label class="f">เรื่องที่ได้รับแต่งตั้ง (บรรทัดละ 1 รายการ)<textarea name="services" rows="5">${esc(s.services.join('\n'))}</textarea></label>
       <div class="ferr" role="alert" style="grid-column:1 / -1"></div>
       <div style="grid-column:1 / -1"><button class="btn" type="submit">${icon('check')}บันทึก</button></div>
+    </div></form>
+    <form id="mailform" class="card"><div class="card-h"><h3>ข้อความอีเมล</h3><span class="sub">แก้สำนวนอีเมลได้เอง · คำในวงเล็บปีกกา เช่น {{vessel}} ระบบจะแทนค่าจากงานให้</span></div><div class="card-b stack tpl-list">
+      ${MAIL_KINDS.map(([k, title, where, vars]) => `<details class="tpl"><summary><b>${esc(title)}</b><span class="sub">${where}</span></summary><div class="tpl-b">
+        <textarea class="mail" name="${k}" maxlength="4000" spellcheck="false" aria-label="ข้อความอีเมล ${esc(title)}">${esc(tpl[k])}</textarea>
+        <div class="tpl-vars">${vars.map(v => `<div><code>{{${v}}}</code><span>${esc(VAR_TH[v])}</span></div>`).join('')}</div>
+        <div class="tpl-prev" hidden><div class="sub"></div><pre></pre></div>
+        <div class="row"><button class="btn line sm" data-act="a-tplreset" data-kind="${k}" type="button">${icon('refresh')}คืนค่าเริ่มต้น</button></div>
+      </div></details>`).join('')}
+      <div class="ferr" role="alert"></div>
+      <div><button class="btn" type="submit">${icon('check')}บันทึกข้อความอีเมล</button></div>
     </div></form>`;
+    loadPreview(alive);
     return;
   }
   if (tab === 'backup') {
@@ -138,6 +185,27 @@ function resDialog(kind, x) {
   });
 }
 
+async function loadPreview(alive) {
+  try {
+    const { jobs } = await api('GET', '/api/jobs?status=open');
+    if (!jobs.length || !alive()) return;
+    const last = jobs.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+    const d = await api('GET', `/api/jobs/${last.id}`);
+    if (!alive()) return;
+    PREVIEW = d;
+    document.querySelectorAll('#mailform details.tpl').forEach(showPreview);
+  } catch (e) {}
+}
+
+function showPreview(det) {
+  const box = det && det.querySelector('.tpl-prev');
+  if (!PREVIEW || !box) return;
+  const ta = det.querySelector('textarea');
+  box.hidden = false;
+  box.querySelector('.sub').textContent = `ตัวอย่างจากงาน ${PREVIEW.job.vessel} (ยังไม่บันทึก)`;
+  box.querySelector('pre').textContent = mail(ta.name, PREVIEW.job, PREVIEW.crew, { ...A, settings: { ...A.settings, mail_tpl: { [ta.name]: ta.value } } });
+}
+
 function renumber(box) {
   [...box.querySelectorAll('.cp-row')].forEach((r, i) => {
     r.querySelector('.cp-n').textContent = i + 1;
@@ -161,8 +229,18 @@ export const actions = {
     if (box.children.length <= 2) return toast('ต้องมีอย่างน้อย 2 จุด');
     t.closest('.cp-row').remove();
     renumber(box);
+  },
+  'a-tplreset'(t) {
+    const det = t.closest('details');
+    det.querySelector('textarea').value = DEFAULT_TPL[t.dataset.kind];
+    showPreview(det);
+    toast('คืนค่าเริ่มต้นแล้ว กด "บันทึกข้อความอีเมล" เพื่อใช้งาน');
   }
 };
+
+document.addEventListener('input', e => {
+  if (e.target.matches('#mailform textarea')) showPreview(e.target.closest('details'));
+});
 
 document.addEventListener('change', e => {
   if (!e.target.matches('.cp-edit [data-chain]')) return;
@@ -172,7 +250,7 @@ document.addEventListener('change', e => {
 
 document.addEventListener('submit', async e => {
   const f = e.target;
-  if (f.id !== 'cpform' && f.id !== 'genform') return;
+  if (f.id !== 'cpform' && f.id !== 'genform' && f.id !== 'mailform') return;
   e.preventDefault();
   const err = f.querySelector('.ferr');
   err.textContent = '';
@@ -189,6 +267,13 @@ document.addEventListener('submit', async e => {
         const ch = rows.findIndex(r => r.querySelector('[data-chain]').checked);
         body[key + '_chain'] = ch < 0 ? 0 : ch;
       }
+    } else if (f.id === 'mailform') {
+      const blank = MAIL_KINDS.find(([k]) => !f.elements[k].value.trim());
+      if (blank) {
+        f.elements[blank[0]].closest('details').open = true;
+        throw new Error(`ข้อความ "${blank[1]}" ว่างอยู่ พิมพ์ข้อความหรือกดคืนค่าเริ่มต้นก่อนบันทึก`);
+      }
+      body = { mail_tpl: Object.fromEntries(MAIL_KINDS.map(([k]) => [k, f.elements[k].value])) };
     } else {
       const fd = new FormData(f);
       const lines = k => String(fd.get(k) || '').split('\n').map(s => s.trim()).filter(Boolean);
@@ -196,7 +281,7 @@ document.addEventListener('submit', async e => {
     }
     const r = await api('PUT', '/api/settings', body);
     A.settings = r.settings;
-    toast('บันทึกการตั้งค่าแล้ว');
+    toast(f.id === 'mailform' ? 'บันทึกข้อความอีเมลแล้ว' : 'บันทึกการตั้งค่าแล้ว');
   } catch (x) { err.textContent = x.message; }
   finally { btn.disabled = false; }
 });

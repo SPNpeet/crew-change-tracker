@@ -9,6 +9,9 @@
     "db:local": "wrangler d1 migrations apply cct --local",
     "db:remote": "wrangler d1 migrations apply cct --remote",
     "test": "node --test tests/api.test.mjs",
+    "test:e2e": "node tests/e2e/e2e-ui.mjs",
+    "test:e2e:audit": "node tests/e2e/audit-app.mjs",
+    "test:e2e:offline": "node tests/e2e/offline.mjs",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

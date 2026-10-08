@@ -148,11 +148,14 @@ function tick() {
 }
 setInterval(tick, 20000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tick(); });
-window.addEventListener('online', async () => {
-  const n = await flushOutbox(A.me && A.me.id);
-  if (n) { toast(`ส่งข้อมูลที่ค้างไว้ ${n} รายการแล้ว`); tick(); }
-});
-setInterval(async () => { if (A.me && pendingCount(A.me.id) && navigator.onLine) { const n = await flushOutbox(A.me.id); if (n) tick(); } }, 30000);
+export async function flushPending() {
+  const r = await flushOutbox(A.me && A.me.id);
+  const msg = [r.sent ? `ส่งข้อมูลที่ค้างไว้ ${r.sent} รายการแล้ว` : '', ...r.failed].filter(Boolean).join(' · ');
+  if (msg) toast(msg, r.failed.length ? 8000 : 2600);
+  return !!msg;
+}
+window.addEventListener('online', async () => { if (await flushPending()) tick(); });
+setInterval(async () => { if (A.me && pendingCount(A.me.id) && navigator.onLine && await flushPending()) tick(); }, 30000);
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('/sw.js').catch(() => {});
 

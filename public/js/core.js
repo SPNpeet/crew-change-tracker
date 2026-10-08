@@ -95,46 +95,52 @@ export function prepItems(job, crew, now, ctx) {
   return out.sort((a, b) => a.w - b.w);
 }
 
+export const DEFAULT_TPL = {
+  appoint: '{{to}}Subject: APPOINTMENT – {{services_line}} / {{vessel}} / {{PORT}}\n\nDear {{agent}},\n\nWe are pleased to inform you that we have been appointed by {{owner}} to handle the following for {{vessel}} at {{port}}:\n{{services}}\n\nOn signers: {{on}} / Off signers: {{off}}\n\nKindly advise the latest vessel schedule (ETA / ETB / ETD) for our reference.\n\n{{signature}}',
+  sched: '{{to}}Subject: {{vessel}} – UPDATED SCHEDULE\n\nDear {{owner}},\n\nPlease be advised the updated schedule of {{vessel}} at {{port}} (local time):\nETA {{eta}}\nETB {{etb}}\nETD {{etd}}\n\nCrew change plan remains as scheduled.\n\n{{signature}}',
+  gate: '{{to}}Subject: GATE PERMISSION – {{vessel}} / {{PORT}}{{etb_date}}\n\nDear {{agent}},\n\nPlease arrange gate permission for the following persons:\n\n{{gate_lines}}\n\n{{signature}}',
+  plan: '{{to}}Subject: {{vessel}} – CREW CHANGE PLAN\n\nDear {{owner}} / Captain,\n\nPlease find the crew change plan at {{port}} (local time):\n\n{{plan_rows}}\n\n{{signature}}',
+  night: '{{to}}Subject: {{vessel}} – NIGHT UPDATE {{time}}\n\nDear {{owner}},\n\nCurrent status of crew change at {{port}}:\n{{status_lines}}\n\nPlanned until morning (local time):\n{{night_plan}}\n\nNext update will be sent at 07:00 LT.\n\n{{signature}}',
+  morning: '{{to}}Subject: {{vessel}} – MORNING UPDATE\n\nDear {{owner}},\n\nActual progress overnight (local time):\n{{morning_done}}\n\nCurrent status:\n{{status_lines}}\n\n{{signature}}',
+  update: '{{to}}Subject: {{vessel}} – CREW CHANGE UPDATE {{time}}\n\nDear {{owner}},\n\n{{status_lines}}\n\n{{signature}}'
+};
+
+export const render = (tpl, vars) => String(tpl).replace(/\{\{(\w+)\}\}/g, (m, k) => (Object.hasOwn(vars, k) ? String(vars[k] ?? '-') : m));
+
 export function mail(kind, job, crew, ctx) {
+  if (!Object.hasOwn(DEFAULT_TPL, kind)) kind = 'update';
   const late = ctx.settings.late_min;
-  const on = crew.filter(c => c.type === 'on'), off = crew.filter(c => c.type === 'off');
-  const sig = ctx.settings.company.signature;
-  const port = job.port || '-';
-  const to = e => e ? `To: ${e}\n` : '';
-  if (kind === 'appoint') {
-    const svc = job.services.length ? job.services : ['Crew change'];
-    return `${to(job.agent_email)}Subject: APPOINTMENT – ${svc.join(' / ').toUpperCase()} / ${job.vessel} / ${port.toUpperCase()}\n\nDear ${job.agent || 'Sir/Madam'},\n\nWe are pleased to inform you that we have been appointed by ${job.owner || 'the Owner'} to handle the following for ${job.vessel} at ${port}:\n${svc.map(s => '- ' + s).join('\n')}\n\nOn signers: ${on.length} / Off signers: ${off.length}\n\nKindly advise the latest vessel schedule (ETA / ETB / ETD) for our reference.\n\n${sig}`;
-  }
-  if (kind === 'sched') return `${to(job.owner_email)}Subject: ${job.vessel} – UPDATED SCHEDULE\n\nDear ${job.owner || 'Sir/Madam'},\n\nPlease be advised the updated schedule of ${job.vessel} at ${port} (local time):\nETA ${fmtD(job.eta)}\nETB ${fmtD(job.etb)}\nETD ${fmtD(job.etd)}\n\nCrew change plan remains as scheduled.\n\n${sig}`;
-  if (kind === 'gate') {
-    const lines = on.concat(off).map(c => `${c.type === 'on' ? 'On signer ' : 'Off signer'} | ${c.name} | ${c.rank || '-'} | ${c.nationality || '-'} | ${c.passport || '(pending)'}`);
-    [...new Set(crew.map(c => c.agent_id).filter(Boolean))].forEach(id => { const u = ctx.user(id); if (u) lines.push(`Boarding agent | ${u.name} | ID ${u.id_card || '-'}`); });
-    [...new Set(crew.map(c => c.vehicle_id).filter(Boolean))].forEach(id => { const v = ctx.vehicle(id); if (v) lines.push(`Driver | ${v.driver_en || v.driver} | ${v.driver_id || '-'} | Van ${v.plate || '-'}`); });
-    return `${to(job.agent_email)}Subject: GATE PERMISSION – ${job.vessel} / ${port.toUpperCase()}${job.etb ? ' / ' + fmtD(job.etb).slice(0, 5) : ''}\n\nDear ${job.agent || 'Sir/Madam'},\n\nPlease arrange gate permission for the following persons:\n\n${lines.join('\n')}\n\n${sig}`;
-  }
-  if (kind === 'plan') {
-    const rows = crew.map(c => `${c.name} (${c.rank || '-'}) ${c.type === 'on' ? 'On signer' : 'Off signer'}${c.flight ? ' ' + c.flight : ''}:\n` + c.cps.map((x, j) => `  ${x.name_en} ${x.actual != null ? fmtD(x.actual) + ' (done)' : fmtD(expected(c, j, late))}`).join('\n'));
-    return `${to(job.owner_email)}Subject: ${job.vessel} – CREW CHANGE PLAN\n\nDear ${job.owner || 'Sir/Madam'} / Captain,\n\nPlease find the crew change plan at ${port} (local time):\n\n${rows.join('\n\n')}\n\n${sig}`;
-  }
   const now = Date.now();
+  const on = crew.filter(c => c.type === 'on'), off = crew.filter(c => c.type === 'off');
+  const port = job.port || '-';
+  const svc = job.services.length ? job.services : ['Crew change'];
+  const email = kind === 'appoint' || kind === 'gate' ? job.agent_email : job.owner_email;
+  const gate = on.concat(off).map(c => `${c.type === 'on' ? 'On signer ' : 'Off signer'} | ${c.name} | ${c.rank || '-'} | ${c.nationality || '-'} | ${c.passport || '(pending)'}`);
+  [...new Set(crew.map(c => c.agent_id).filter(Boolean))].forEach(id => { const u = ctx.user(id); if (u) gate.push(`Boarding agent | ${u.name} | ID ${u.id_card || '-'}`); });
+  [...new Set(crew.map(c => c.vehicle_id).filter(Boolean))].forEach(id => { const v = ctx.vehicle(id); if (v) gate.push(`Driver | ${v.driver_en || v.driver} | ${v.driver_id || '-'} | Van ${v.plate || '-'}`); });
+  const rows = crew.map(c => `${c.name} (${c.rank || '-'}) ${c.type === 'on' ? 'On signer' : 'Off signer'}${c.flight ? ' ' + c.flight : ''}:\n` + c.cps.map((x, j) => `  ${x.name_en} ${x.actual != null ? fmtD(x.actual) + ' (done)' : fmtD(expected(c, j, late))}`).join('\n'));
   const lineOf = c => {
     const i = nextIdx(c), lt = lastTime(c), d = lastDelay(c);
     const note = c.notes.length ? ` (remark: ${c.notes[c.notes.length - 1].text})` : '';
     return `- ${c.name} (${c.rank || '-'}): ${currentEn(c)}${lt ? ' at ' + hm(lt) : ''}${d > late && i !== -1 && i <= c.chain_end ? ` (delayed ${Math.round(d)} min)` : ''}${i !== -1 && c.cps[i].plan != null ? `, next: ${c.cps[i].name_en} ${dhm(expected(c, i, late))}` : ''}${note}`;
   };
-  if (kind === 'night') {
-    const until = now + 12 * 3600000;
-    const upcoming = crew.flatMap(c => c.cps.map((x, j) => ({ c, x, t: x.actual == null ? expected(c, j, late) : null }))).filter(e => e.t != null && e.t <= until).sort((a, b) => a.t - b.t);
-    const plan = upcoming.length ? upcoming.map(e => `- ${fmtD(e.t)} ${e.c.name}: ${e.x.name_en}`).join('\n') : '- No movement planned until morning.';
-    return `${to(job.owner_email)}Subject: ${job.vessel} – NIGHT UPDATE ${hm(now)}\n\nDear ${job.owner || 'Sir/Madam'},\n\nCurrent status of crew change at ${port}:\n${crew.map(lineOf).join('\n')}\n\nPlanned until morning (local time):\n${plan}\n\nNext update will be sent at 07:00 LT.\n\n${sig}`;
-  }
-  if (kind === 'morning') {
-    const since = now - 12 * 3600000;
-    const done = crew.flatMap(c => c.cps.filter(x => x.actual != null && x.actual >= since).map(x => ({ c, x }))).sort((a, b) => a.x.actual - b.x.actual);
-    const list = done.length ? done.map(e => `- ${fmtD(e.x.actual)} ${e.c.name}: ${e.x.name_en}`).join('\n') : '- No movement overnight.';
-    return `${to(job.owner_email)}Subject: ${job.vessel} – MORNING UPDATE\n\nDear ${job.owner || 'Sir/Madam'},\n\nActual progress overnight (local time):\n${list}\n\nCurrent status:\n${crew.map(lineOf).join('\n')}\n\n${sig}`;
-  }
-  return `${to(job.owner_email)}Subject: ${job.vessel} – CREW CHANGE UPDATE ${hm(now)}\n\nDear ${job.owner || 'Sir/Madam'},\n\n${crew.map(lineOf).join('\n')}\n\n${sig}`;
+  const until = now + 12 * 3600000, since = now - 12 * 3600000;
+  const upcoming = crew.flatMap(c => c.cps.map((x, j) => ({ c, x, t: x.actual == null ? expected(c, j, late) : null }))).filter(e => e.t != null && e.t <= until).sort((a, b) => a.t - b.t);
+  const done = crew.flatMap(c => c.cps.filter(x => x.actual != null && x.actual >= since).map(x => ({ c, x }))).sort((a, b) => a.x.actual - b.x.actual);
+  const vars = {
+    vessel: job.vessel, port, PORT: port.toUpperCase(),
+    owner: job.owner || (kind === 'appoint' ? 'the Owner' : 'Sir/Madam'), agent: job.agent || 'Sir/Madam',
+    to: email ? `To: ${email}\n` : '',
+    services: svc.map(s => '- ' + s).join('\n'), services_line: svc.join(' / ').toUpperCase(),
+    on: on.length, off: off.length,
+    eta: fmtD(job.eta), etb: fmtD(job.etb), etd: fmtD(job.etd), etb_date: job.etb ? ' / ' + fmtD(job.etb).slice(0, 5) : '',
+    gate_lines: gate.join('\n'), plan_rows: rows.join('\n\n'), status_lines: crew.map(lineOf).join('\n'),
+    night_plan: upcoming.length ? upcoming.map(e => `- ${fmtD(e.t)} ${e.c.name}: ${e.x.name_en}`).join('\n') : '- No movement planned until morning.',
+    morning_done: done.length ? done.map(e => `- ${fmtD(e.x.actual)} ${e.c.name}: ${e.x.name_en}`).join('\n') : '- No movement overnight.',
+    time: hm(now), signature: ctx.settings.company.signature
+  };
+  const tpl = ctx.settings.mail_tpl && ctx.settings.mail_tpl[kind];
+  return render(typeof tpl === 'string' && tpl.trim() ? tpl : DEFAULT_TPL[kind], vars);
 }
 
 export function missText(crew, docs) {

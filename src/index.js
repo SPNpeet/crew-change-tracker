@@ -262,6 +262,13 @@ function validateSetting(k, v) {
     out.forEach(x => { if (!x.en) x.en = x.th; });
     return out;
   }
+  if (k === 'mail_tpl') {
+    const kinds = Object.keys(def);
+    const ok = v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === kinds.length
+      && kinds.every(x => typeof v[x] === 'string' && v[x].length <= 4000 && text(v[x]));
+    if (!ok) throw new HttpError(400, 'ข้อความอีเมลไม่ถูกต้อง');
+    return Object.fromEntries(kinds.map(x => [x, text(v[x], 4000)]));
+  }
   throw new HttpError(400, 'ตั้งค่านี้ไม่ได้');
 }
 
@@ -466,6 +473,16 @@ function openJob(c) {
   if (c.job_status !== 'open') throw new HttpError(409, 'งานนี้ปิดแล้ว แก้ไขไม่ได้');
 }
 
+function deviceTime(atRaw, sentRaw, t) {
+  const num = v => v == null || v === '' ? NaN : Number(v);
+  const at = num(atRaw), sentAt = num(sentRaw);
+  if (Number.isFinite(at) && Number.isFinite(sentAt)) {
+    const ago = Math.max(0, sentAt - at);
+    return ago > 72 * 3600000 ? t : t - ago;
+  }
+  return !Number.isFinite(at) || at > t + 120000 || at < t - 12 * 3600000 ? t : at;
+}
+
 async function addCrew(req, env, u, jobId) {
   requireOffice(u);
   const j = await getJob(env, jobId);
@@ -599,12 +616,7 @@ async function confirm(req, env, u, id) {
   const { results: cps } = await env.DB.prepare('SELECT * FROM checkpoints WHERE crew_id = ? ORDER BY idx').bind(id).all();
   const next = cps.findIndex(x => x.actual_at == null);
   const t = now();
-  let at = Number(b.at);
-  const sentAt = Number(b.sent_at);
-  if (Number.isFinite(at) && Number.isFinite(sentAt)) {
-    const ago = Math.max(0, sentAt - at);
-    at = ago > 72 * 3600000 ? t : t - ago;
-  } else if (!Number.isFinite(at) || at > t + 120000 || at < t - 12 * 3600000) at = t;
+  let at = deviceTime(b.at, b.sent_at, t);
   if (!Number.isInteger(idx) || idx < 0 || idx >= cps.length) throw new HttpError(400, 'จุดไม่ถูกต้อง');
   if (cps[idx].actual_at != null) {
     if (cps[idx].actual_by === u.id && Math.abs(cps[idx].actual_at - at) < 120000) return json({ ok: true, duplicate: true, at: cps[idx].actual_at });
@@ -673,7 +685,7 @@ async function addPhoto(req, env, u, id, url) {
   const lat = url.searchParams.get('lat') ? Number(url.searchParams.get('lat')) : null;
   const lng = url.searchParams.get('lng') ? Number(url.searchParams.get('lng')) : null;
   const r = await env.DB.prepare('INSERT INTO photos (crew_id, point, r2_key, size, lat, lng, at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, point, key, buf.byteLength, Number.isFinite(lat) ? lat : null, Number.isFinite(lng) ? lng : null, now(), u.id).run();
+    .bind(id, point, key, buf.byteLength, Number.isFinite(lat) ? lat : null, Number.isFinite(lng) ? lng : null, deviceTime(url.searchParams.get('at'), url.searchParams.get('sent_at'), now()), u.id).run();
   await log(env, c.job_id, u.id, `${c.name} · แนบรูป${point ? ' ' + point : ''}`, 'photo');
   return json({ id: r.meta.last_row_id });
 }
