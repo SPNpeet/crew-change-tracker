@@ -1,5 +1,5 @@
 import { A, go, flushPending } from '../app.js';
-import { api, confirmPoint, uploadPhoto, pendingFor } from '../api.js';
+import { api, confirmPoint, prepareAndUploadPhoto, pendingFor } from '../api.js';
 import { esc, hm, dhm, fmtD, avatar, pill, nextIdx, status, planCell, expected, doneCount, MIN } from '../core.js';
 import { icon, toast, openLb, stampPhoto, getGps } from '../ui.js';
 import { roleLabel } from './auth.js';
@@ -149,22 +149,25 @@ export const actions = {
 
 export const changes = {
   async 'f-photo'(t) {
+    if (t.disabled) return;
     const file = t.files && t.files[0];
     t.value = '';
     if (!file) return;
-    if (!file.type.startsWith('image/')) return toast('เลือกได้เฉพาะไฟล์รูป');
+    if (!file.type.startsWith('image/')) return toast('กรุณาเลือกรูปภาพ');
     const c = crewOf(t.dataset.id);
     const job = F.jobs.find(j => j.id === c.job_id) || {};
-    toast('กำลังบันทึกรูป...', 8000);
-    let out;
+    const inputs = [...document.querySelectorAll('[data-chg="f-photo"]')];
+    inputs.forEach(input => { input.disabled = true; });
+    const uid = A.me.id, point = t.dataset.point;
+    toast('กำลังเตรียมรูป...', 8000);
     try {
-      out = await stampPhoto(file, { point: t.dataset.point, name: c.name, rank: c.rank, vessel: job.vessel || '', company: A.settings.company.name });
-    } catch (e) { return toast('เปิดไฟล์รูปนี้ไม่ได้'); }
-    const point = t.dataset.point;
-    const r = await uploadPhoto(c.id, out.blob, { point, lat: out.gps ? out.gps.lat.toFixed(6) : null, lng: out.gps ? out.gps.lng.toFixed(6) : null, label: `"${point}" ของ ${c.name}` }, A.me.id);
-    if (r.queued) return toast('ไม่มีสัญญาณ เก็บรูปไว้ในเครื่องแล้ว ระบบส่งเองเมื่อมีสัญญาณ', 4000);
-    toast(out.gps ? 'บันทึกรูปพร้อมเวลาและพิกัดแล้ว' : 'บันทึกรูปพร้อมเวลาแล้ว (ไม่ได้เปิด GPS)');
-    await poll();
+      const r = await prepareAndUploadPhoto(c.id, file, { point, label: `"${point}" ของ ${c.name}` },
+        () => stampPhoto(file, { point, name: c.name, rank: c.rank, vessel: job.vessel || '', company: A.settings.company.name }), uid);
+      if (r.repeated) return toast('รูปนี้ถูกบันทึกหรืออยู่ในคิวส่งแล้ว ไม่ได้เพิ่มรูปซ้ำ');
+      if (r.queued) return toast('เก็บรูปไว้ในเครื่องแล้ว จะส่งให้อัตโนมัติเมื่อออนไลน์ ดูรายการได้ที่บัญชีของฉัน', 4000);
+      toast(r.gps ? 'บันทึกรูปพร้อมเวลาและพิกัดแล้ว' : 'บันทึกรูปพร้อมเวลาแล้ว (ไม่มีพิกัด GPS)');
+      await poll();
+    } finally { inputs.forEach(input => { input.disabled = false; }); }
   }
 };
 

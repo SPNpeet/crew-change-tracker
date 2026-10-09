@@ -1,4 +1,4 @@
-import { api, flushOutbox, pendingCount } from './api.js';
+import { api, flushOutbox, pendingCount, LOGOUT_EVENT } from './api.js';
 import { esc, hm } from './core.js';
 import { icon, toast, closeLb, busy } from './ui.js';
 import * as auth from './views/auth.js';
@@ -139,7 +139,19 @@ A.actions.reload = () => location.reload();
 A.actions.back = () => { if (history.state && history.state.app) history.back(); else go(A.isOffice() ? '/jobs' : '/field', true); };
 
 window.addEventListener('popstate', route);
-window.addEventListener('cct-logout', () => { if (A.route.name !== 'owner' && A.route.name !== 'login') { A.me = null; go('/login', true); } });
+function leaveSession() {
+  if (A.route.name === 'owner' || A.route.name === 'login' || A.route.name === 'setup') return;
+  A.me = null;
+  closeLb();
+  chrome(false);
+  document.getElementById('app').replaceChildren();
+  location.replace('/login');
+}
+window.addEventListener('cct-logout', leaveSession);
+window.addEventListener('storage', e => { if (e.key === LOGOUT_EVENT) leaveSession(); });
+// Do not leave an authenticated photo or DOM snapshot in the back/forward cache.
+window.addEventListener('pagehide', () => { if (A.me) { closeLb(); document.getElementById('app').replaceChildren(); chrome(false); } });
+window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
 
 function tick() {
   document.getElementById('clock').textContent = hm(Date.now());

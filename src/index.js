@@ -1,4 +1,4 @@
-import { HttpError, json, readJson, randomId, now, str, text, ms, intOrNull, parseJson, bkk, bkkParts } from './util.js';
+import { HttpError, json, readJson, randomId, sha256, now, str, text, ms, intOrNull, parseJson, bkk, bkkParts } from './util.js';
 import { login, logout, currentUser, sessionCookie, hashPassword, checkPasswordRules, publicUser, isOffice, seesAllCrew, requireUser, requireOffice, requireAdmin } from './auth.js';
 import { DEFAULTS, EDITABLE, loadSettings } from './settings.js';
 import { buildXlsx } from './xlsx.js';
@@ -41,11 +41,13 @@ async function route(req, env, url) {
   if (p === '/api/setup' && m === 'GET') return json({ needed: await setupNeeded(env) });
   if (p === '/api/setup' && m === 'POST') return setup(req, env, url);
   if (p === '/api/login' && m === 'POST') return doLogin(req, env, url);
-  if (p === '/api/logout' && m === 'POST') { await logout(req, env); return json({ ok: true }, 200, { 'set-cookie': sessionCookie('', url.protocol === 'https:') }); }
+  if (p === '/api/logout' && m === 'POST') { await logout(req, env); return json({ ok: true }, 200, { 'set-cookie': sessionCookie('', url.protocol === 'https:'), 'clear-site-data': '"cache"' }); }
   if (seg[0] === 'public' && seg[1] && m === 'GET') return publicJob(env, seg[1]);
 
   const u = await currentUser(req, env);
   requireUser(u);
+  const expectedUser = req.headers.get('x-cct-user');
+  if (expectedUser && expectedUser !== String(u.id)) throw new HttpError(401, 'บัญชีในหน้าต่างนี้เปลี่ยนแล้ว กรุณาเข้าสู่ระบบใหม่');
 
   if (p === '/api/me' && m === 'GET') return json(await boot(env, u));
   if (p === '/api/me/password' && m === 'POST') return changeOwnPassword(req, env, u);
@@ -668,7 +670,6 @@ async function addNote(req, env, u, id) {
 async function addPhoto(req, env, u, id, url) {
   const c = await getCrew(env, id);
   canField(u, c);
-  openJob(c);
   const type = (req.headers.get('content-type') || '').split(';')[0].trim();
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(type)) throw new HttpError(415, 'รองรับเฉพาะไฟล์รูป JPG / PNG / WEBP');
   const len = Number(req.headers.get('content-length') || 0);
@@ -676,18 +677,47 @@ async function addPhoto(req, env, u, id, url) {
   const buf = await req.arrayBuffer();
   if (!buf.byteLength) throw new HttpError(400, 'ไม่พบไฟล์รูป');
   if (buf.byteLength > MAX_PHOTO) throw new HttpError(413, 'รูปใหญ่เกิน 10 MB');
-  const settings = await loadSettings(env);
-  const used = await env.DB.prepare('SELECT COALESCE(SUM(size), 0) AS n FROM photos').first();
-  if (used.n + buf.byteLength > settings.storage_gb * 1024 ** 3) throw new HttpError(507, 'พื้นที่เก็บไฟล์เต็มแล้ว กรุณาแจ้งผู้ดูแลระบบ');
-  const key = `photos/${c.job_id}/${id}/${Date.now()}-${randomId(8)}.${type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg'}`;
-  await env.FILES.put(key, buf, { httpMetadata: { contentType: type } });
   const point = str(url.searchParams.get('point'), 80);
-  const lat = url.searchParams.get('lat') ? Number(url.searchParams.get('lat')) : null;
-  const lng = url.searchParams.get('lng') ? Number(url.searchParams.get('lng')) : null;
-  const r = await env.DB.prepare('INSERT INTO photos (crew_id, point, r2_key, size, lat, lng, at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, point, key, buf.byteLength, Number.isFinite(lat) ? lat : null, Number.isFinite(lng) ? lng : null, deviceTime(url.searchParams.get('at'), url.searchParams.get('sent_at'), now()), u.id).run();
-  await log(env, c.job_id, u.id, `${c.name} · แนบรูป${point ? ' ' + point : ''}`, 'photo');
-  return json({ id: r.meta.last_row_id });
+  const coordinate = name => { const v = url.searchParams.get(name); return v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null; };
+  const lat = coordinate('lat'), lng = coordinate('lng');
+  const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
+  // sent_at changes on retry; the original capture time and payload must not.
+  const requestHash = await sha256(JSON.stringify([id, type, point, lat, lng, url.searchParams.get('at'), digest]));
+  const suppliedId = url.searchParams.get('upload_id');
+  if (suppliedId != null && !/^[A-Za-z0-9_-]{16,80}$/.test(suppliedId)) throw new HttpError(400, 'รหัสรูปไม่ถูกต้อง');
+  // Old clients/outboxes have no upload id. Keep them retry-safe during rollout.
+  const uploadId = suppliedId || requestHash;
+  const existing = () => env.DB.prepare('SELECT id, request_hash FROM photos WHERE user_id = ? AND upload_id = ?').bind(u.id, uploadId).first();
+  const duplicate = row => {
+    if (row.request_hash !== requestHash) throw new HttpError(409, 'รหัสรูปนี้ใช้กับรูปอื่นแล้ว กรุณาเลือกรูปใหม่');
+    return json({ id: row.id, duplicate: true });
+  };
+  const saved = await existing();
+  if (saved) return duplicate(saved);
+  openJob(c);
+  const settings = await loadSettings(env);
+  const limit = settings.storage_gb * 1024 ** 3;
+  const used = await env.DB.prepare('SELECT COALESCE(SUM(size), 0) AS n FROM photos').first();
+  if (used.n + buf.byteLength > limit) throw new HttpError(507, 'พื้นที่เก็บไฟล์เต็มแล้ว กรุณาแจ้งผู้ดูแลระบบ');
+  const key = `photos/${c.job_id}/${id}/${u.id}-${uploadId}.${type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg'}`;
+  // Conditional creation prevents two racing requests from overwriting the object.
+  const obj = await env.FILES.put(key, buf, { onlyIf: new Headers({ 'If-None-Match': '*' }), httpMetadata: { contentType: type }, customMetadata: { request_hash: requestHash } });
+  if (!obj && (await env.FILES.head(key))?.customMetadata?.request_hash !== requestHash) throw new HttpError(409, 'รหัสรูปนี้ใช้กับรูปอื่นแล้ว กรุณาเลือกรูปใหม่');
+  const at = deviceTime(url.searchParams.get('at'), url.searchParams.get('sent_at'), now());
+  const [insert] = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO photos (crew_id, point, r2_key, size, lat, lng, at, user_id, upload_id, request_hash)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE id = ? AND status = 'open')
+      AND (SELECT COALESCE(SUM(size), 0) FROM photos) + ? <= ?
+      ON CONFLICT(user_id, upload_id) DO NOTHING RETURNING id`)
+      .bind(id, point, key, buf.byteLength, lat, lng, at, u.id, uploadId, requestHash, c.job_id, buf.byteLength, limit),
+    env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) SELECT ?, ?, ?, ?, ? WHERE changes() = 1')
+      .bind(c.job_id, now(), u.id, 'photo', `${c.name} · แนบรูป${point ? ' ' + point : ''}`)
+  ]);
+  if (insert.results.length) return json({ id: insert.results[0].id });
+  const raced = await existing();
+  if (raced) return duplicate(raced);
+  openJob(await getCrew(env, id));
+  throw new HttpError(507, 'พื้นที่เก็บไฟล์เต็มแล้ว กรุณาแจ้งผู้ดูแลระบบ');
 }
 
 async function photoRow(env, u, id) {
@@ -701,7 +731,7 @@ async function getPhoto(env, u, id) {
   const p = await photoRow(env, u, id);
   const obj = await env.FILES.get(p.r2_key);
   if (!obj) throw new HttpError(404, 'ไม่พบไฟล์รูป');
-  return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType || 'image/jpeg', 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'" } });
+  return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType || 'image/jpeg', 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'" } });
 }
 
 async function deletePhoto(env, u, id) {

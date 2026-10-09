@@ -1,4 +1,4 @@
-const CACHE = 'cct-shell-v1';
+const CACHE = 'cct-shell-v2';
 const SHELL = ['/', '/app.css', '/app2.css', '/fonts/fonts.css', '/js/app.js', '/js/api.js', '/js/core.js', '/js/ui.js',
   '/js/views/auth.js', '/js/views/jobs.js', '/js/views/office.js', '/js/views/field.js', '/js/views/owner.js', '/js/views/admin.js', '/js/views/report.js',
   '/icons/icon-192.png'];
