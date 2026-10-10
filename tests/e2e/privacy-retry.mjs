@@ -130,7 +130,10 @@ try {
       assert.equal(await b.eval(`fetch('/api/me').then(r=>r.status)`),200,'a queued photo must block logout across tabs');
       await tab.eval(`window.fetch=window.originalFetch`);
       await unblock(); await flush(); await account(); await logout();
-      await new Promise(r=>setTimeout(r,500));
+      assert.equal(await b.eval(`fetch('/api/me').then(r=>r.status)`),401,'source tab must complete logout');
+      // Navigation and storage-event delivery in a background tab are async.
+      // Wait for the outcome with a bound, rather than assuming a 500ms reload.
+      for(let i=0;i<50 && await tab.eval(`location.pathname`)!=='/login';i++)await new Promise(r=>setTimeout(r,100));
       assert.equal(await tab.eval(`location.pathname`),'/login');
       assert.equal(await tab.eval(`!!document.querySelector('.pgrid')`),false);
       return { waitedForOtherTab:true, queuePreserved:true, otherTabSignedOut:true };

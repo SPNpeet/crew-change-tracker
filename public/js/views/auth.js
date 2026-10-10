@@ -13,11 +13,12 @@ function shell(inner) {
     ${inner}</div></div>`;
 }
 
-export async function enter(r) {
+export async function enter(r, alive = () => true) {
   if (r.name === 'account') return account();
   chrome(false);
   if (r.name === 'setup') {
     const s = await api('GET', '/api/setup');
+    if (!alive()) return;
     if (!s.needed) return go('/login', true);
     app().innerHTML = shell(`<h1 class="auth-t">ติดตั้งระบบครั้งแรก</h1><p class="muted s14">สร้างบัญชีผู้ดูแลระบบคนแรก ใช้รหัสติดตั้งที่ได้รับจากผู้พัฒนา</p>
       <form class="form1" id="setupf" autocomplete="off">
@@ -41,6 +42,7 @@ export async function enter(r) {
   if (A.me) return go('/', true);
   let needed = false;
   try { needed = (await api('GET', '/api/setup')).needed; } catch (e) {}
+  if (!alive()) return;
   if (needed) return go('/setup', true);
   app().innerHTML = shell(`<h1 class="auth-t">เข้าสู่ระบบ</h1>
     <form class="form1" id="loginf">

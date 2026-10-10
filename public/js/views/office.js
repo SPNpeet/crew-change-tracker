@@ -18,12 +18,16 @@ export const STEPS = [
 ];
 
 let J = null;
+let requestSeq = 0;
 const late = () => A.settings.late_min;
 const closed = () => J.job.status === 'closed';
 const ctx = () => A;
 
 async function load(id) {
-  J = await api('GET', `/api/jobs/${id}`);
+  const seq = ++requestSeq;
+  const data = await api('GET', `/api/jobs/${id}`);
+  if (seq !== requestSeq || A.route.name !== 'job' || A.route.params.id !== id) return null;
+  J = data;
   A.job = J;
   return J;
 }
@@ -47,12 +51,14 @@ export async function poll(r) {
 }
 
 async function refresh(msg) {
+  if (A.route.name !== 'job' || A.route.params.id !== J?.job.id) return;
   await load(J.job.id);
   render(true);
   if (msg) toast(msg);
 }
 
 function render(keepScroll) {
+  if (!J || A.route.name !== 'job' || A.route.params.id !== J.job.id) return;
   const y = window.scrollY;
   const k = A.route.params.step;
   const old = A.ui.mailEdited && app().querySelector('textarea.mail');

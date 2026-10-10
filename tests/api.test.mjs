@@ -333,7 +333,7 @@ test('email templates are editable by the admin only', async () => {
   assert.deepEqual(Object.keys(def).sort(), ['appoint', 'gate', 'morning', 'night', 'plan', 'sched', 'update']);
   assert.ok(def.appoint.includes('{{services_line}}') && def.morning.includes('MORNING UPDATE'));
   const mine = { ...def, appoint: 'Subject: TEMPLATE-CHANGED {{vessel}}\r\n\r\n{{signature}}' };
-  let r = await admin('PUT', '/api/settings', { mail_tpl: mine });
+  let r = await admin('PUT', '/api/settings', { mail_tpl: mine, mail_tpl_expected: def });
   assert.equal(r.status, 200);
   assert.equal(r.data.settings.mail_tpl.appoint, 'Subject: TEMPLATE-CHANGED {{vessel}}\n\n{{signature}}');
   assert.equal((await office('GET', '/api/me')).data.settings.mail_tpl.appoint, r.data.settings.mail_tpl.appoint);
@@ -347,7 +347,7 @@ test('email templates are editable by the admin only', async () => {
   assert.equal((await field('PUT', '/api/settings', { mail_tpl: def })).status, 403);
   assert.equal((await office('PUT', '/api/settings', { mail_tpl: def })).status, 403);
   assert.equal((await admin('GET', '/api/me')).data.settings.mail_tpl.appoint, r.data.settings.mail_tpl.appoint, 'refused writes change nothing');
-  assert.deepEqual((await admin('PUT', '/api/settings', { mail_tpl: def })).data.settings.mail_tpl, def);
+  assert.deepEqual((await admin('PUT', '/api/settings', { mail_tpl: def, mail_tpl_expected: r.data.settings.mail_tpl })).data.settings.mail_tpl, def);
 });
 
 test('settings validation and closing a job', async () => {

@@ -1,7 +1,7 @@
 import { A, go } from '../app.js';
 import { api } from '../api.js';
 import { esc, fmtD, dateTh, toInput, fromInput } from '../core.js';
-import { icon } from '../ui.js';
+import { icon, toast } from '../ui.js';
 
 const app = () => document.getElementById('app');
 
@@ -38,7 +38,7 @@ export async function enter(r, alive) {
       btn.disabled = true;
       try {
         const d = await api('POST', '/api/jobs', readJobForm(new FormData(e.target)));
-        go(`/jobs/${d.id}/1`, true);
+        if (alive()) go(`/jobs/${d.id}/1`, true);
       } catch (x) { e.target.querySelector('.ferr').textContent = x.message; btn.disabled = false; }
     });
     return;
@@ -53,7 +53,7 @@ export async function enter(r, alive) {
     return;
   }
   el.className = 'jobgrid';
-  el.innerHTML = d.jobs.map(j => {
+  const cards = rows => rows.map(j => {
     const done = j.steps.filter(Boolean).length;
     return `<a class="card jobtile" href="/jobs/${j.id}" data-link>
       <div class="jt-top"><div class="v">${esc(j.vessel)}</div>${j.status === 'closed' ? '<span class="pill gray">ปิดแล้ว</span>' : `<span class="pill ${done === 9 ? 'ok' : 'info'}">${done} / 9 ขั้นตอน</span>`}</div>
@@ -61,4 +61,27 @@ export async function enter(r, alive) {
       <dl><div><dt>ETA</dt><dd>${j.eta ? fmtD(j.eta) : '—'}</dd></div><div><dt>ลูกเรือ</dt><dd>On ${j.n_on} · Off ${j.n_off}</dd></div><div><dt>${j.status === 'closed' ? 'ปิดงาน' : 'เปิดงาน'}</dt><dd>${dateTh(j.closed_at || j.created_at)}</dd></div></dl>
       <div class="bar"><i style="width:${Math.round(done / 9 * 100)}%"></i></div></a>`;
   }).join('');
+  el.innerHTML = cards(d.jobs);
+  if (d.nextOffset != null) {
+    const more = document.createElement('button');
+    more.type = 'button'; more.className = 'btn line block';
+    more.textContent = 'โหลดงานเพิ่มเติม'; more.style.marginTop = '16px';
+    more.dataset.act = 'jobs-more'; el.after(more);
+    let offset = d.nextOffset;
+    const seen = new Set(d.jobs.map(j => j.id));
+    more.addEventListener('click', async () => {
+      if (more.disabled || offset == null) return;
+      more.disabled = true;
+      try {
+        const next = await api('GET', `/api/jobs?status=${status}&offset=${offset}`);
+        if (!alive()) return;
+        const rows = next.jobs.filter(j => !seen.has(j.id));
+        rows.forEach(j => seen.add(j.id));
+        el.insertAdjacentHTML('beforeend', cards(rows));
+        offset = next.nextOffset;
+        if (offset == null) more.remove();
+      } catch (e) { if (alive()) toast(e.message); }
+      finally { more.disabled = false; }
+    });
+  }
 }

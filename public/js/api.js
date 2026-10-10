@@ -81,10 +81,12 @@ async function upload(crewId, blob, extra, uid) {
   const item = { uid, crew: crewId, photo: extra.uploadId || crypto.randomUUID(), point: extra.point, lat: extra.lat, lng: extra.lng, at: extra.at || Date.now(), label: extra.label };
   try { return await api('POST', photoPath(item), blob, { userId: uid, allow401: true }); }
   catch (e) {
-    if (!keep(e.status)) throw e;
+    // Camera captures may not exist in the device gallery. Preserve even a
+    // definitive rejection so the owner can save a copy or explicitly discard.
+    if (!keep(e.status)) item.error = `รูป ${item.label || 'ที่บันทึกไว้'} ส่งไม่สำเร็จ: ${e.message}`;
     try { await blobs('readwrite', s => s.put(blob, item.photo)); } catch (x) { throw new ApiError(0, 'เก็บรูปไว้ในเครื่องไม่ได้ กรุณาเก็บรูปต้นฉบับไว้และลองใหม่'); }
     writeBox(readBox().filter(x => x.photo !== item.photo).concat(item));
-    return { queued: true, at: item.at };
+    return { queued: true, at: item.at, error: item.error };
   }
 }
 export const uploadPhoto = (crewId, blob, extra, uid) => deviceTask(() => upload(crewId, blob, extra, uid));

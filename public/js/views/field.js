@@ -36,6 +36,7 @@ export async function poll() {
 }
 
 function render(keep) {
+  if (!A.me || !F || !['field', 'crew'].includes(A.route.name)) return;
   const y = window.scrollY;
   const old = keep && document.getElementById('noteedit');
   const draft = old && !old.hidden ? old.querySelector('textarea').value : null;
@@ -116,10 +117,10 @@ export const actions = {
   async 'f-confirm'(t) {
     if (t.disabled) return;
     t.disabled = true;
-    const c = crewOf(t.dataset.id), idx = +t.dataset.idx;
+    const c = crewOf(t.dataset.id), idx = +t.dataset.idx, uid = A.me.id;
     const gps = await Promise.race([getGps(), new Promise(r => setTimeout(() => r(null), 1500))]);
     try {
-      const r = await confirmPoint(c.id, idx, { ...(gps ? { lat: gps.lat, lng: gps.lng } : {}), label: `"${c.cps[idx].name}" ของ ${c.name}` }, A.me.id);
+      const r = await confirmPoint(c.id, idx, { ...(gps ? { lat: gps.lat, lng: gps.lng } : {}), label: `"${c.cps[idx].name}" ของ ${c.name}` }, uid);
       c.cps[idx].actual = r.at;
       if (r.queued) { c.cps[idx].pending = true; toast(`ไม่มีสัญญาณ บันทึกเวลา ${hm(r.at)} ไว้ในเครื่องแล้ว ระบบส่งเองเมื่อมีสัญญาณ`, 4000); }
       else toast(`บันทึก "${c.cps[idx].name}" เวลา ${hm(r.at)} แล้ว สำนักงานเห็นทันที`);
@@ -164,6 +165,7 @@ export const changes = {
       const r = await prepareAndUploadPhoto(c.id, file, { point, label: `"${point}" ของ ${c.name}` },
         () => stampPhoto(file, { point, name: c.name, rank: c.rank, vessel: job.vessel || '', company: A.settings.company.name }), uid);
       if (r.repeated) return toast('รูปนี้ถูกบันทึกหรืออยู่ในคิวส่งแล้ว ไม่ได้เพิ่มรูปซ้ำ');
+      if (r.error) return toast(`${r.error} · เก็บสำเนาไว้แล้ว ดูที่บัญชี > งานที่ยังส่งไม่สำเร็จ`, 8000);
       if (r.queued) return toast('เก็บรูปไว้ในเครื่องแล้ว จะส่งให้อัตโนมัติเมื่อออนไลน์ ดูรายการได้ที่บัญชีของฉัน', 4000);
       toast(r.gps ? 'บันทึกรูปพร้อมเวลาและพิกัดแล้ว' : 'บันทึกรูปพร้อมเวลาแล้ว (ไม่มีพิกัด GPS)');
       await poll();

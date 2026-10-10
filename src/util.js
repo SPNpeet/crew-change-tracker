@@ -22,7 +22,7 @@ export async function readJson(req, max = 256 * 1024) {
   if (!text) return {};
   try {
     const v = JSON.parse(text);
-    if (v && typeof v === 'object') return v;
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v;
   } catch (e) {}
   throw new HttpError(400, 'รูปแบบข้อมูลไม่ถูกต้อง');
 }

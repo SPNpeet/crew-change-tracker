@@ -110,6 +110,7 @@ export async function enter(r, alive) {
       <div class="ferr" role="alert"></div>
       <div><button class="btn" type="submit">${icon('check')}บันทึกข้อความอีเมล</button></div>
     </div></form>`;
+    document.getElementById('mailform').mailExpected = structuredClone(tpl);
     loadPreview(alive);
     return;
   }
@@ -273,7 +274,7 @@ document.addEventListener('submit', async e => {
         f.elements[blank[0]].closest('details').open = true;
         throw new Error(`ข้อความ "${blank[1]}" ว่างอยู่ พิมพ์ข้อความหรือกดคืนค่าเริ่มต้นก่อนบันทึก`);
       }
-      body = { mail_tpl: Object.fromEntries(MAIL_KINDS.map(([k]) => [k, f.elements[k].value])) };
+      body = { mail_tpl: Object.fromEntries(MAIL_KINDS.map(([k]) => [k, f.elements[k].value])), mail_tpl_expected: f.mailExpected };
     } else {
       const fd = new FormData(f);
       const lines = k => String(fd.get(k) || '').split('\n').map(s => s.trim()).filter(Boolean);
@@ -281,6 +282,7 @@ document.addEventListener('submit', async e => {
     }
     const r = await api('PUT', '/api/settings', body);
     A.settings = r.settings;
+    if (f.id === 'mailform') f.mailExpected = structuredClone(r.settings.mail_tpl);
     toast(f.id === 'mailform' ? 'บันทึกข้อความอีเมลแล้ว' : 'บันทึกการตั้งค่าแล้ว');
   } catch (x) { err.textContent = x.message; }
   finally { btn.disabled = false; }

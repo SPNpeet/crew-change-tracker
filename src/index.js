@@ -228,6 +228,7 @@ async function saveResource(req, env, u, kind, id) {
     return json({ id: r.meta.last_row_id });
   }
   if ('name' in vals && !vals.name) throw new HttpError(400, 'กรุณากรอกชื่อ');
+  if (!(await env.DB.prepare(`SELECT 1 FROM ${kind} WHERE id = ?`).bind(id).first())) throw new HttpError(404, 'ไม่พบรายการนี้');
   const keys = Object.keys(vals);
   if (keys.length) await env.DB.prepare(`UPDATE ${kind} SET ${keys.map(k => k + ' = ?').join(', ')} WHERE id = ?`).bind(...keys.map(k => vals[k]), id).run();
   return json({ ok: true });
@@ -237,6 +238,20 @@ async function putSettings(req, env, u) {
   requireAdmin(u);
   const b = await readJson(req);
   const stmts = [];
+  if ('mail_tpl' in b) {
+    const value = validateSetting('mail_tpl', b.mail_tpl);
+    if (Object.keys(b).some(k => k !== 'mail_tpl' && k !== 'mail_tpl_expected')) throw new HttpError(400, 'กรุณาบันทึกข้อความอีเมลแยกจากการตั้งค่าอื่น');
+    if (!('mail_tpl_expected' in b)) throw new HttpError(428, 'หน้านี้เป็นรุ่นเก่า กรุณาคัดลอกร่างไว้แล้วโหลดหน้าใหม่ก่อนบันทึก');
+    const expected = validateSetting('mail_tpl', b.mail_tpl_expected);
+    const prior = await env.DB.prepare("SELECT value FROM settings WHERE key = 'mail_tpl'").first();
+    const current = parseJson(prior?.value, DEFAULTS.mail_tpl);
+    const conflict = () => new HttpError(409, 'มีผู้แก้ข้อความอีเมลระหว่างที่คุณกำลังแก้ไข ร่างของคุณยังอยู่ กรุณาคัดลอกไว้แล้วโหลดหน้าใหม่เพื่อตรวจสอบก่อนบันทึก');
+    if (Object.keys(value).some(k => current[k] !== expected[k])) throw conflict();
+    // Compare again inside the write: another request can save after our read.
+    const saved = await env.DB.prepare("INSERT INTO settings (key, value) SELECT 'mail_tpl', ? WHERE COALESCE((SELECT value FROM settings WHERE key = 'mail_tpl'), '') = ? ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(JSON.stringify(value), prior?.value ?? '').run();
+    if (!saved.meta.changes) throw conflict();
+    return json({ settings: { ...await loadSettings(env), mail_tpl: value } });
+  }
   for (const k of Object.keys(b)) {
     if (!EDITABLE.includes(k) || k === 'max_users' || k === 'storage_gb') continue;
     const v = validateSetting(k, b[k]);
@@ -250,7 +265,10 @@ function validateSetting(k, v) {
   const def = DEFAULTS[k];
   if (k === 'late_min') { const n = Number(v); if (!Number.isInteger(n) || n < 1 || n > 240) throw new HttpError(400, 'เวลาช้ากว่าแผนต้องอยู่ระหว่าง 1–240 นาที'); return n; }
   if (k === 'cp_on_chain' || k === 'cp_off_chain') { const n = Number(v); if (!Number.isInteger(n) || n < 0 || n > 30) throw new HttpError(400, 'ค่าไม่ถูกต้อง'); return n; }
-  if (k === 'company') return { name: str(v.name, 120) || def.name, name_th: str(v.name_th, 120) || def.name_th, signature: text(v.signature, 400) || def.signature };
+  if (k === 'company') {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new HttpError(400, 'ข้อมูลบริษัทไม่ถูกต้อง');
+    return { name: str(v.name, 120) || def.name, name_th: str(v.name_th, 120) || def.name_th, signature: text(v.signature, 400) || def.signature };
+  }
   if (k === 'docs' || k === 'services') {
     if (!Array.isArray(v)) throw new HttpError(400, 'รูปแบบไม่ถูกต้อง');
     const out = [...new Set(v.map(x => str(x, 60)).filter(Boolean))].slice(0, 20);
@@ -258,7 +276,7 @@ function validateSetting(k, v) {
     return out;
   }
   if (k === 'cp_on' || k === 'cp_off') {
-    if (!Array.isArray(v)) throw new HttpError(400, 'รูปแบบไม่ถูกต้อง');
+    if (!Array.isArray(v) || v.some(x => !x || typeof x !== 'object' || Array.isArray(x))) throw new HttpError(400, 'รูปแบบไม่ถูกต้อง');
     const out = v.map(x => ({ th: str(x.th, 60), en: str(x.en, 60), gap: Math.max(0, Math.min(10080, Math.round(Number(x.gap) || 0))) })).filter(x => x.th).slice(0, 20);
     if (out.length < 2) throw new HttpError(400, 'จุดสถานะต้องมีอย่างน้อย 2 จุด');
     out.forEach(x => { if (!x.en) x.en = x.th; });
@@ -289,13 +307,16 @@ function jobOut(j) {
 async function listJobs(env, u, url) {
   requireOffice(u);
   const status = url.searchParams.get('status') === 'closed' ? 'closed' : 'open';
+  const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 200;
+  const offset = url.searchParams.has('offset') ? Number(url.searchParams.get('offset')) : 0;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isSafeInteger(offset) || offset < 0) throw new HttpError(400, 'หน้ารายการไม่ถูกต้อง');
   const { results } = await env.DB.prepare(
     `SELECT j.id, j.vessel, j.port, j.owner, j.eta, j.etb, j.steps, j.status, j.created_at, j.closed_at,
        (SELECT COUNT(*) FROM crew c WHERE c.job_id = j.id AND c.type = 'on') AS n_on,
        (SELECT COUNT(*) FROM crew c WHERE c.job_id = j.id AND c.type = 'off') AS n_off
-     FROM jobs j WHERE j.status = ? ORDER BY ${status === 'open' ? 'COALESCE(j.eta, j.created_at) ASC' : 'j.closed_at DESC'} LIMIT 200`
-  ).bind(status).all();
-  return json({ jobs: results.map(j => ({ ...j, steps: parseJson(j.steps, []) })) });
+     FROM jobs j WHERE j.status = ? ORDER BY ${status === 'open' ? 'COALESCE(j.eta, j.created_at) ASC' : 'j.closed_at DESC'}, j.id ASC LIMIT ? OFFSET ?`
+  ).bind(status, limit + 1, offset).all();
+  return json({ jobs: results.slice(0, limit).map(j => ({ ...j, steps: parseJson(j.steps, []) })), nextOffset: results.length > limit ? offset + limit : null });
 }
 
 async function createJob(req, env, u) {
@@ -318,6 +339,7 @@ async function patchJob(req, env, u, id) {
   requireOffice(u);
   const j = await getJob(env, id);
   const b = await readJson(req);
+  if (j.status !== 'open' && !(b.status === 'open' && Object.keys(b).length === 1)) throw new HttpError(409, 'งานนี้ปิดแล้ว กรุณาเปิดงานก่อนแก้ไข');
   const sets = {};
   const logs = [];
   for (const f of JOB_FIELDS) if (f in b) sets[f] = f === 'remark' ? text(b[f], 2000) : str(b[f], 200);
@@ -496,12 +518,13 @@ async function addCrew(req, env, u, jobId) {
   const rows = list.map(x => {
     const name = str(x && x.name, 120);
     if (!name) throw new HttpError(400, 'กรุณากรอกชื่อลูกเรือให้ครบทุกคน');
+    if (x.type !== undefined && !['on', 'off'].includes(x.type)) throw new HttpError(400, 'ประเภทไม่ถูกต้อง');
     const type = x.type === 'off' ? 'off' : 'on';
     const tpl = type === 'on' ? settings.cp_on : settings.cp_off;
     return { name, type, tpl, agent: intOrNull(x.agent_id), chain: Math.min(tpl.length - 1, type === 'on' ? settings.cp_on_chain : settings.cp_off_chain), x };
   });
   const agents = [...new Set(rows.map(r => r.agent).filter(Boolean))];
-  for (const a of agents) if (!(await env.DB.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'field'").bind(a).first())) throw new HttpError(400, 'ไม่พบพนักงานผู้ดูแลที่เลือก');
+  for (const a of agents) if (!(await env.DB.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'field' AND active = 1").bind(a).first())) throw new HttpError(400, 'ไม่พบพนักงานผู้ดูแลที่ใช้งานอยู่');
   const stmts = [];
   const crewStmt = [];
   const t = now();
@@ -549,7 +572,9 @@ async function patchCrew(req, env, u, id) {
     const v = intOrNull(b[f]);
     let nm = '';
     if (v != null) {
-      const row = await env.DB.prepare(`SELECT name FROM ${table} WHERE id = ?`).bind(v).first();
+      // Historical assignments remain readable; new assignments must be usable.
+      const eligible = v === c[f] ? '' : ` AND active = 1${f === 'agent_id' ? " AND role = 'field'" : ''}`;
+      const row = await env.DB.prepare(`SELECT name FROM ${table} WHERE id = ?${eligible}`).bind(v).first();
       if (!row) throw new HttpError(400, `ไม่พบ${label}ที่เลือก`);
       nm = row.name;
     }
@@ -626,8 +651,7 @@ async function confirm(req, env, u, id) {
   }
   if (idx !== next) throw new HttpError(409, `ต้องยืนยัน "${cps[next].name}" ก่อน`);
   if (idx > 0 && at < cps[idx - 1].actual_at) at = cps[idx - 1].actual_at;
-  const lat = Number.isFinite(Number(b.lat)) && b.lat !== null ? Number(b.lat) : null;
-  const lng = Number.isFinite(Number(b.lng)) && b.lng !== null ? Number(b.lng) : null;
+  const lat = coordinate(b.lat, 90), lng = coordinate(b.lng, 180);
   const res = await env.DB.batch([
     env.DB.prepare('UPDATE checkpoints SET actual_at = ?, actual_by = ?, lat = ?, lng = ? WHERE crew_id = ? AND idx = ? AND actual_at IS NULL').bind(at, u.id, lat, lng, id, idx),
     env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) VALUES (?, ?, ?, ?, ?)').bind(c.job_id, t, u.id, 'cp', `${c.name} · ${cps[idx].name}`)
@@ -667,6 +691,13 @@ async function addNote(req, env, u, id) {
 
 /* ---------- photos ---------- */
 
+function coordinate(v, max) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || Math.abs(n) > max) throw new HttpError(400, 'พิกัดไม่ถูกต้อง');
+  return n;
+}
+
 async function addPhoto(req, env, u, id, url) {
   const c = await getCrew(env, id);
   canField(u, c);
@@ -678,8 +709,7 @@ async function addPhoto(req, env, u, id, url) {
   if (!buf.byteLength) throw new HttpError(400, 'ไม่พบไฟล์รูป');
   if (buf.byteLength > MAX_PHOTO) throw new HttpError(413, 'รูปใหญ่เกิน 10 MB');
   const point = str(url.searchParams.get('point'), 80);
-  const coordinate = name => { const v = url.searchParams.get(name); return v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null; };
-  const lat = coordinate('lat'), lng = coordinate('lng');
+  const lat = coordinate(url.searchParams.get('lat'), 90), lng = coordinate(url.searchParams.get('lng'), 180);
   const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
   // sent_at changes on retry; the original capture time and payload must not.
   const requestHash = await sha256(JSON.stringify([id, type, point, lat, lng, url.searchParams.get('at'), digest]));
@@ -865,7 +895,9 @@ async function getBackup(env, u, name) {
 
 export async function dumpAll(env) {
   const tables = {};
-  for (const t of DUMP_TABLES) tables[t] = (await env.DB.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()).results;
+  // D1 batch is a transaction, so related tables describe the same snapshot.
+  const rows = await env.DB.batch(DUMP_TABLES.map(t => env.DB.prepare(`SELECT * FROM ${t} ORDER BY rowid`)));
+  DUMP_TABLES.forEach((t, i) => { tables[t] = rows[i].results; });
   return { format: 'cct-backup', version: 1, created: now(), tables };
 }
 
