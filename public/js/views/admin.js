@@ -56,7 +56,7 @@ export async function enter(r, alive) {
       <div class="scroll"><table class="t nw"><thead><tr><th>ชื่อ</th><th>รหัสพนักงาน</th><th>ชื่อผู้ใช้</th><th>สิทธิ์</th><th>เบอร์โทร</th><th>สถานะ</th><th></th></tr></thead><tbody>
       ${USERS.map(u => `<tr class="${u.active ? '' : 'dim'}"><td><div class="nm">${esc(u.name)}</div><div class="sub">${esc(u.title || '')}</div></td><td>${esc(u.emp_code || '—')}</td><td>${esc(u.username)}</td><td>${esc(roleLabel(u))}</td><td>${esc(u.phone || '—')}</td><td>${u.active ? (u.locked ? '<span class="pill warn-c">ล็อกชั่วคราว</span>' : '<span class="pill ok">ใช้งาน</span>') : '<span class="pill gray">ปิดแล้ว</span>'}</td><td class="acts"><button class="btn line sm" data-act="a-edituser" data-id="${u.id}" type="button">${icon('edit')}แก้ไข</button></td></tr>`).join('')}
       </tbody></table></div></div>
-      <p class="muted s13">พนักงานภาคสนามเห็นเฉพาะลูกเรือที่ได้รับมอบหมาย ยกเว้นเปิด "เห็นลูกเรือทุกคน" สำหรับหัวหน้างาน · บัญชีที่ไม่ใช้แล้วให้ปิดแทนการลบ เพื่อให้ประวัติงานยังอยู่ครบ</p>`;
+      <p class="muted s13">พนักงานภาคสนามเห็นเฉพาะลูกเรือที่ได้รับมอบหมาย ยกเว้นสิทธิ์ "หัวหน้างานภาคสนาม" ที่เห็นลูกเรือทุกคน · บัญชีที่ไม่ใช้แล้วให้ปิดแทนการลบ เพื่อให้ประวัติงานยังอยู่ครบ</p>`;
     return;
   }
   if (tab === 'vehicles' || tab === 'hotels') {
@@ -140,8 +140,7 @@ function userDialog(u) {
   openDialog(`<form class="dlg-form wide" autocomplete="off">${dlgHead(edit ? 'แก้ไขผู้ใช้ · ' + u.name : 'เพิ่มผู้ใช้')}<div class="dlg-b form">
     <label class="f">ชื่อที่แสดง<input name="name" required maxlength="80" value="${esc(u.name || '')}" placeholder="เช่น สมศักดิ์"></label>
     <label class="f">ชื่อผู้ใช้ (ภาษาอังกฤษ)<input name="username" ${edit ? 'disabled' : 'required'} pattern="[A-Za-z0-9._\-]{3,40}" autocapitalize="none" value="${esc(u.username || '')}" placeholder="เช่น somsak"></label>
-    <label class="f">สิทธิ์<select name="role" ${edit && u.id === A.me.id ? 'disabled' : ''}><option value="field" ${u.role === 'field' ? 'selected' : ''}>พนักงานภาคสนาม (มือถือ)</option><option value="office" ${u.role === 'office' ? 'selected' : ''}>สำนักงาน</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>ผู้ดูแลระบบ</option></select></label>
-    <label class="f chk"><input type="checkbox" name="see_all" ${u.see_all ? 'checked' : ''}><span>เห็นลูกเรือทุกคน (หัวหน้างานภาคสนาม)</span></label>
+    <label class="f" style="grid-column:1 / -1">สิทธิ์<select name="role" ${edit && u.id === A.me.id ? 'disabled' : ''}><option value="field" ${u.role === 'field' && !u.see_all ? 'selected' : ''}>พนักงานภาคสนาม</option><option value="lead" ${u.role === 'field' && u.see_all ? 'selected' : ''}>หัวหน้างานภาคสนาม</option><option value="office" ${u.role === 'office' ? 'selected' : ''}>สำนักงาน</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>ผู้ดูแลระบบ</option></select><span class="fhelp">พนักงานภาคสนาม ใช้มือถือ เห็นเฉพาะลูกเรือที่ได้รับมอบหมาย · หัวหน้างานภาคสนาม เห็นลูกเรือทุกคน · สำนักงาน ทำงาน 9 ขั้นตอน · ผู้ดูแลระบบ ทำได้เหมือนสำนักงาน และตั้งค่าระบบได้</span></label>
     <label class="f">รหัสพนักงาน (ไม่บังคับ)<input name="emp_code" maxlength="30" autocapitalize="characters" value="${esc(u.emp_code || '')}" placeholder="เช่น HR02"></label>
     <label class="f">ตำแหน่ง / หน้าที่<input name="title" maxlength="80" value="${esc(u.title || '')}" placeholder="เช่น Boarding agent · สนามบิน"></label>
     <label class="f">เบอร์โทร<input name="phone" maxlength="30" inputmode="tel" value="${esc(u.phone || '')}"></label>
@@ -150,8 +149,9 @@ function userDialog(u) {
     ${edit ? `<label class="f chk" style="grid-column:1 / -1"><input type="checkbox" name="active" ${u.active ? 'checked' : ''} ${u.id === A.me.id ? 'disabled' : ''}><span>เปิดใช้งานบัญชีนี้ (ปิดแล้วจะเข้าระบบไม่ได้ทันที)</span></label>` : ''}
     ${edit && u.locked ? `<label class="f chk" style="grid-column:1 / -1"><input type="checkbox" name="unlock" checked><span>ปลดล็อกบัญชี (ถูกล็อกเพราะใส่รหัสผิดหลายครั้ง)</span></label>` : ''}
     </div>${dlgFoot(edit ? 'บันทึก' : 'เพิ่มผู้ใช้')}</form>`, async fd => {
-    const b = { name: fd.get('name'), emp_code: fd.get('emp_code'), title: fd.get('title'), phone: fd.get('phone'), id_card: fd.get('id_card'), see_all: fd.get('see_all') === 'on' };
-    if (fd.get('role')) b.role = fd.get('role');
+    const b = { name: fd.get('name'), emp_code: fd.get('emp_code'), title: fd.get('title'), phone: fd.get('phone'), id_card: fd.get('id_card') };
+    const role = fd.get('role');
+    if (role) { b.role = role === 'lead' ? 'field' : role; b.see_all = role === 'lead'; }
     if (fd.get('password')) b.password = fd.get('password');
     if (edit) {
       if (u.id !== A.me.id) b.active = fd.get('active') === 'on';

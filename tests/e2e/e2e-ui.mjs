@@ -95,6 +95,7 @@ ok(gate.includes('Boarding agent | สมศักดิ์ | ID 3-1001') && gat
 
 // step 7: assign
 await b.go('/jobs/1/7');
+await waitFor(`select[data-f="agent_id"][data-id="${kenji.id}"]`);
 await b.eval(`(() => { const s = document.querySelector('select[data-f="agent_id"][data-id="${kenji.id}"]'); s.value = s.options[[...s.options].findIndex(o => o.textContent === 'สมศักดิ์')].value; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
 ok(await eventually(async () => { job = await get('/api/jobs/1'); return job.crew.find(c => c.id === kenji.id).agent_id != null; }), 'step7 assign field staff saves');
 const fieldList = await get('/api/field', field);
