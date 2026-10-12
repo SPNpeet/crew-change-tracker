@@ -22,6 +22,21 @@ export async function api(method, path, body, opts = {}) {
   return data;
 }
 
+export async function apiBytes(path) {
+  let res;
+  try {
+    res = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
+  } catch (e) {
+    throw new ApiError(0, 'ไม่มีสัญญาณอินเทอร์เน็ต กรุณาลองใหม่');
+  }
+  if (!res.ok) {
+    if (res.status === 401) window.dispatchEvent(new CustomEvent('cct-logout'));
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data.error || 'ระบบขัดข้อง กรุณาลองใหม่');
+  }
+  return { bytes: new Uint8Array(await res.arrayBuffer()), mime: (res.headers.get('content-type') || '').split(';')[0].trim() };
+}
+
 const OUTBOX = 'cct-outbox-v1';
 function readBox() { try { return JSON.parse(localStorage.getItem(OUTBOX) || '[]'); } catch (e) { return []; } }
 function writeBox(list) { try { localStorage.setItem(OUTBOX, JSON.stringify(list)); } catch (e) {} }

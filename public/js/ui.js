@@ -86,6 +86,24 @@ export function openDialog(html, onSubmit) {
 export const dlgHead = t => `<div class="dlg-h"><h3>${esc(t)}</h3><button type="button" class="iconbtn plain" data-close aria-label="ปิด">${icon('x')}</button></div>`;
 export const dlgFoot = (label = 'บันทึก') => `<div class="ferr" role="alert"></div><div class="dlg-f"><button type="button" class="btn line" data-close>ยกเลิก</button><button type="submit" class="btn">${esc(label)}</button></div>`;
 
+export function saveFile(bytes, name, type) {
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+const UPLOAD_TYPES = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', pdf: 'application/pdf' };
+export function uploadType(file, allowed) {
+  const ext = (/\.([a-z0-9]+)$/i.exec(file.name || '') || [])[1];
+  const type = allowed.includes(file.type) ? file.type : UPLOAD_TYPES[String(ext || '').toLowerCase()];
+  return allowed.includes(type) ? type : '';
+}
+
 export function openLb(src, cap) {
   const lb = document.getElementById('lb');
   document.getElementById('lbimg').src = src;

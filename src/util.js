@@ -70,6 +70,14 @@ export function ms(v) {
   return Math.round(n);
 }
 
+export function ymd(v) {
+  if (v === null || v === '' || v === undefined) return '';
+  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(String(v));
+  const d = m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  if (!d || +m[1] < 1900 || +m[1] > 2200 || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) throw new HttpError(400, 'วันที่ไม่ถูกต้อง');
+  return m[0];
+}
+
 export function intOrNull(v) {
   if (v === null || v === '' || v === undefined) return null;
   const n = Number(v);

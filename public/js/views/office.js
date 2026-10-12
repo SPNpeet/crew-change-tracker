@@ -1,7 +1,7 @@
-import { A, go } from '../app.js';
-import { api } from '../api.js';
-import { esc, words, glue, hm, fmtD, fmtFull, dhm, dur, toInput, fromInput, avatar, pill, typeTag, nextIdx, status, current, lastTime, planCell, expected, missingDocs, prepItems, mail, missText, doneCount, MIN } from '../core.js';
-import { icon, toast, copy, openDialog, dlgHead, dlgFoot, openLb } from '../ui.js';
+import { A, go, reloadRefs } from '../app.js';
+import { api, apiBytes } from '../api.js';
+import { esc, words, glue, hm, fmtD, fmtFull, dateTh, dhm, dur, toInput, fromInput, avatar, pill, typeTag, nextIdx, status, current, lastTime, planCell, expected, missingDocs, prepItems, mail, missText, doneCount, MIN, DEFAULT_OKTB, FILE_KINDS, fileSize, ymdOf } from '../core.js';
+import { icon, toast, copy, openDialog, dlgHead, dlgFoot, openLb, saveFile, uploadType } from '../ui.js';
 import { jobForm, readJobForm } from './jobs.js';
 
 const app = () => document.getElementById('app');
@@ -101,11 +101,11 @@ const noCrew = () => `<div class="card empty"><div class="nm">ยังไม่
 function body(k, now) {
   const j = J.job, crew = J.crew, docs = A.settings.docs;
   if (k === 1) {
-    const rows = crew.map(c => `<tr class="${missingDocs(c, docs).length ? 'bad' : ''}"><td>${who(c)}</td><td>${typeTag(c)}</td>${docs.map(d => `<td><button class="doc ${c.docs[d] ? 'ok' : 'late'}" data-act="o-doc" data-id="${c.id}" data-doc="${esc(d)}" type="button" ${closed() ? 'disabled' : ''}>${c.docs[d] ? icon('check') + 'ได้รับ' : icon('x') + 'ยังไม่มี'}</button></td>`).join('')}<td>${missingDocs(c, docs).length ? pill('late', 'ขาด ' + missingDocs(c, docs).length) : pill('ok', 'ครบ')}</td><td class="acts">${closed() ? '' : `<button class="iconbtn plain" data-act="o-editcrew" data-id="${c.id}" type="button" title="แก้ไข" aria-label="แก้ไข ${esc(c.name)}">${icon('edit')}</button><button class="iconbtn" data-act="o-delcrew" data-id="${c.id}" type="button" title="ลบ" aria-label="ลบ ${esc(c.name)}">${icon('trash')}</button>`}</td></tr>`).join('');
+    const rows = crew.map(c => `<tr class="${missingDocs(c, docs).length ? 'bad' : ''}"><td>${who(c)}</td><td>${typeTag(c)}</td>${docs.map(d => `<td><button class="doc ${c.docs[d] ? 'ok' : 'late'}" data-act="o-doc" data-id="${c.id}" data-doc="${esc(d)}" type="button" ${closed() ? 'disabled' : ''}>${c.docs[d] ? icon('check') + 'ได้รับ' : icon('x') + 'ยังไม่มี'}</button>${nKind(c, docKind(d)) ? `<div class="fhint">มีไฟล์แนบ ${nKind(c, docKind(d))}</div>` : ''}</td>`).join('')}<td>${missingDocs(c, docs).length ? pill('late', 'ขาด ' + missingDocs(c, docs).length) : pill('ok', 'ครบ')}</td><td class="acts"><button class="btn line sm" data-act="o-files" data-id="${c.id}" type="button">${icon('note')}ไฟล์เอกสาร (${(c.files || []).length})</button>${closed() ? '' : `<button class="iconbtn plain" data-act="o-editcrew" data-id="${c.id}" type="button" title="แก้ไข" aria-label="แก้ไข ${esc(c.name)}">${icon('edit')}</button><button class="iconbtn" data-act="o-delcrew" data-id="${c.id}" type="button" title="ลบ" aria-label="ลบ ${esc(c.name)}">${icon('trash')}</button>`}</td></tr>`).join('');
     const miss = missText(crew, docs);
     return `<div class="stack">
       <div class="card"><div class="card-h"><h3>รายชื่อลูกเรือและเอกสาร</h3><span class="sub">${crew.length} คน</span><div class="act"><button class="btn line sm" data-act="o-copymiss" type="button">${icon('copy')}คัดลอกรายการที่ขาด</button></div></div>
-        ${crew.length ? `<div class="scroll"><table class="t"><thead><tr><th>ลูกเรือ</th><th>ประเภท</th>${docs.map(d => `<th>${esc(d)}</th>`).join('')}<th>สรุป</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="card-b muted">ยังไม่มีลูกเรือ เพิ่มจากแบบฟอร์มด้านล่าง</div>'}</div>
+        ${crew.length ? `<div class="scroll"><table class="t tight crewdocs"><thead><tr><th>ลูกเรือ</th><th>ประเภท</th>${docs.map(d => `<th>${esc(d)}</th>`).join('')}<th>สรุป</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="card-b muted">ยังไม่มีลูกเรือ เพิ่มจากแบบฟอร์มด้านล่าง</div>'}</div>
       <div class="cols">
         ${closed() ? '' : `<div class="card"><div class="card-h"><h3>เพิ่มลูกเรือในงานนี้</h3></div><div class="card-b"><form class="form" id="addcrew" style="grid-template-columns:1fr 1fr">
           <label class="f" style="grid-column:1 / -1">ชื่อ-นามสกุล<input name="name" required maxlength="120" placeholder="เช่น Kenji Sato"></label>
@@ -113,7 +113,10 @@ function body(k, now) {
           <label class="f">ประเภท<select name="type"><option value="on">On signer (ขึ้นเรือ)</option><option value="off">Off signer (ลงเรือ)</option></select></label>
           <label class="f">เที่ยวบิน<input name="flight" maxlength="40" placeholder="เช่น JL 707"></label>
           <label class="f">สัญชาติ<input name="nationality" maxlength="60"></label>
-          <label class="f" style="grid-column:1 / -1">เลขพาสปอร์ต<input name="passport" maxlength="40"></label>
+          <label class="f">เลขพาสปอร์ต<input name="passport" maxlength="40"></label>
+          <label class="f">วันหมดอายุพาสปอร์ต<input type="date" name="passport_exp"></label>
+          <label class="f">เลข Seaman book (SIRB)<input name="sirb_no" maxlength="40"></label>
+          <label class="f">วันหมดอายุ Seaman book<input type="date" name="sirb_exp"></label>
           <div class="ferr" role="alert" style="grid-column:1 / -1"></div>
           <button class="btn" type="submit" style="grid-column:1 / -1">${icon('plus')}เพิ่มลูกเรือ</button>
         </form></div></div>`}
@@ -151,8 +154,12 @@ function body(k, now) {
       const cell = (key, yes, no) => miss && key === 'oktb' && !c.s4.oktb ? pill('gray', 'รอเอกสารครบ') : `<button class="doc ${c.s4[key] ? 'ok' : 'late'}" data-act="o-s4" data-id="${c.id}" data-key="${key}" type="button" ${closed() ? 'disabled' : ''}>${c.s4[key] ? icon('check') + yes : icon('x') + no}</button>`;
       return `<tr class="${!c.s4.imm ? 'warnrow' : ''}"><td><div class="who2">${avatar(c)}<div><div class="nm">${esc(c.name)}</div><div class="sub">${esc(c.flight || '—')} · ถึง ${c.cps[0] && c.cps[0].plan ? dhm(c.cps[0].plan) : 'ยังไม่มีแผน'}</div></div></div></td><td>${cell('oktb', 'ออกแล้ว', 'ยังไม่ออก')}</td><td>${cell('meet', 'ส่งแล้ว', 'ยังไม่ส่ง')}</td><td>${cell('imm', 'ยื่นแล้ว', 'ยังไม่ยื่น')}</td></tr>`;
     }).join('');
-    return `${hint('ลูกเรือที่เอกสารยังไม่ครบ ระบบยังไม่ให้บันทึกว่าออก OKTB · ตัวเอกสาร OKTB ออกตามวิธีเดิมของบริษัท')}<div class="stack">
+    return `${hint('ลูกเรือที่เอกสารยังไม่ครบ ระบบยังไม่ให้บันทึกว่าออก OKTB · ตัวเอกสาร OK TO BOARD สร้างได้จากการ์ดด้านล่าง')}<div class="stack">
       <div class="card"><div class="card-h"><h3>OKTB และเอกสาร ตม. สนามบิน</h3><span class="sub">On signer ${on.length} คน</span></div>${on.length ? `<div class="scroll"><table class="t"><thead><tr><th>ลูกเรือ</th><th>OKTB</th><th>Meeting point</th><th>ตม. สนามบิน</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="card-b muted">ยังไม่มี On signer</div>'}</div>
+      <div class="card"><div class="card-h"><h3>เอกสาร OK TO BOARD สำหรับ ตม. สนามบิน</h3></div><div class="card-b">
+        <div class="muted s14" style="margin-bottom:12px">ได้ PDF ไฟล์เดียวพร้อมยื่น: จดหมาย OK TO BOARD ตามด้วยสำเนาพาสปอร์ต Seaman book และตั๋วเครื่องบิน ที่แนบไว้ในปุ่ม "ไฟล์เอกสาร" ของ<a href="/jobs/${j.id}/1" data-link>ขั้นตอนที่ 1</a></div>
+        <div class="row"><button class="btn" data-act="o-oktb" type="button" ${on.length ? '' : 'disabled'}>${icon('note')}สร้างเอกสาร OK TO BOARD</button>${on.length ? '' : `<span class="muted s13">ยังไม่มี On signer เพิ่มได้ที่ <a href="/jobs/${j.id}/1" data-link>ขั้นตอนที่ 1</a></span>`}</div>
+      </div></div>
       <div class="card"><div class="card-h"><h3>กำหนดยื่นเอกสาร ตม.</h3></div><div class="card-b">
         <div class="muted s14">${j.imm_deadline ? fmtFull(j.imm_deadline) : 'ยังไม่ได้ตั้งกำหนด'}</div>
         <div class="big-num" style="color:${color}">${left == null ? '—' : left < 0 ? 'เกินกำหนด ' + dur(-left) : 'อีก ' + dur(left)}</div>
@@ -281,14 +288,133 @@ function crewDialog(c) {
     <label class="f">ประเภท<select name="type" ${c.cps.some(x => x.actual != null) ? 'disabled' : ''}><option value="on" ${c.type === 'on' ? 'selected' : ''}>On signer</option><option value="off" ${c.type === 'off' ? 'selected' : ''}>Off signer</option></select></label>
     <label class="f">เที่ยวบิน<input name="flight" maxlength="40" value="${esc(c.flight)}"></label>
     <label class="f">สัญชาติ<input name="nationality" maxlength="60" value="${esc(c.nationality)}"></label>
-    <label class="f" style="grid-column:1 / -1">เลขพาสปอร์ต<input name="passport" maxlength="40" value="${esc(c.passport)}"></label>
+    <label class="f">เลขพาสปอร์ต<input name="passport" maxlength="40" value="${esc(c.passport)}"></label>
+    <label class="f">วันหมดอายุพาสปอร์ต<input type="date" name="passport_exp" value="${esc(c.passport_exp)}"></label>
+    <label class="f">เลข Seaman book (SIRB)<input name="sirb_no" maxlength="40" value="${esc(c.sirb_no)}"></label>
+    <label class="f">วันหมดอายุ Seaman book<input type="date" name="sirb_exp" value="${esc(c.sirb_exp)}"></label>
     ${c.type === 'on' || c.type === 'off' ? `<p class="muted s13" style="grid-column:1 / -1;margin:0">${c.cps.some(x => x.actual != null) ? 'เริ่มบันทึกเวลาแล้ว เปลี่ยนประเภทไม่ได้' : 'เปลี่ยนประเภทแล้ว จุดสถานะและแผนเวลาจะเริ่มใหม่'}</p>` : ''}
     </div>${dlgFoot()}</form>`, async fd => {
-    const b = Object.fromEntries(['name', 'rank', 'flight', 'nationality', 'passport'].map(k => [k, fd.get(k)]));
+    const b = Object.fromEntries(['name', 'rank', 'flight', 'nationality', 'passport', 'passport_exp', 'sirb_no', 'sirb_exp'].map(k => [k, fd.get(k)]));
     if (fd.get('type')) b.type = fd.get('type');
     await api('PATCH', `/api/crew/${c.id}`, b);
     await refresh('บันทึกแล้ว');
   });
+}
+
+/* ---------- crew documents ---------- */
+const DOC_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+const docKind = d => /pass|พาส/i.test(d) ? 'passport' : /seaman|sirb|ซีแมน/i.test(d) ? 'sirb' : /ticket|ตั๋ว/i.test(d) ? 'ticket' : '';
+const nKind = (c, kind) => (c.files || []).filter(f => f.kind === kind).length;
+
+function filesBody(c, note = {}) {
+  return FILE_KINDS.map(([k, l]) => {
+    const list = (c.files || []).filter(f => f.kind === k);
+    return `<section class="fgroup"><div class="fg-h"><b>${l}</b><span class="sub">${list.length ? list.length + ' ไฟล์' : 'ยังไม่มีไฟล์'}</span>${closed() ? '' : `<label class="btn line sm">${icon('plus')}เพิ่มไฟล์<input type="file" accept="image/*,application/pdf" multiple data-chg="o-upfile" data-id="${c.id}" data-kind="${k}" hidden></label>`}</div>
+      ${list.map(f => `<div class="frow"><a class="fname" href="/api/files/${f.id}" target="_blank" rel="noopener" title="เปิดดูในแท็บใหม่">${icon(f.mime === 'application/pdf' ? 'note' : 'image')}<span>${esc(f.name)}</span></a><span class="sub">${fileSize(f.size)}</span>${closed() ? '' : `<button class="iconbtn" type="button" data-act="o-delfile" data-id="${f.id}" data-crew="${c.id}" data-kind="${k}" data-name="${esc(f.name)}" title="ลบไฟล์" aria-label="ลบไฟล์ ${esc(f.name)}">${icon('trash')}</button>`}</div>`).join('')}
+      <div class="fstat" role="status">${note.kind === k && note.ok ? esc(note.ok) : ''}</div><div class="ferr" role="alert">${note.kind === k && note.bad ? note.bad.map(esc).join('<br>') : ''}</div></section>`;
+  }).join('');
+}
+
+function filesDialog(c) {
+  openDialog(`<div class="dlg-form wide">${dlgHead('ไฟล์เอกสาร · ' + c.name)}<div class="dlg-b"><div class="fgroups" id="fgroups" data-crew="${c.id}">${filesBody(c)}</div>
+    <p class="muted s13" style="margin:12px 0 0">${closed() ? 'งานนี้ปิดแล้ว เปิดดูไฟล์ได้อย่างเดียว' : 'รับไฟล์รูป JPG / PNG / WEBP และ PDF ไฟล์ละไม่เกิน 10 MB เลือกได้หลายไฟล์พร้อมกัน'} · เปิดดูได้เฉพาะพนักงานสำนักงาน · ใช้แนบท้ายเอกสาร OK TO BOARD ในขั้นตอนที่ 4</p></div>
+    <div class="dlg-f"><button type="button" class="btn" data-close>เสร็จ</button></div></div>`);
+}
+
+async function reloadFiles(id, note) {
+  try { await load(J.job.id); render(true); } catch (e) { note = { ...note, bad: [...(note.bad || []), e.message] }; }
+  const box = document.getElementById('fgroups'), c = findCrew(id);
+  if (!box || +box.dataset.crew !== +id || !c) return;
+  box.classList.remove('busy');
+  box.innerHTML = filesBody(c, note);
+}
+
+/* ---------- OK TO BOARD ---------- */
+function oktbDialog() {
+  const j = J.job, on = J.crew.filter(c => c.type === 'on'), o = j.oktb || {}, s = { ...DEFAULT_OKTB, ...A.settings.oktb }, br = A.brand || {};
+  const saved = typeof o.date === 'string', keep = saved && on.some(c => (o.crew || []).includes(c.id));
+  const today = ymdOf(Date.now());
+  const flightsOf = list => [...new Set(list.map(c => c.flight).filter(Boolean))].join('\n');
+  const where = A.isAdmin() ? '<a href="/admin/general" data-link>ตั้งค่าทั่วไป</a>' : 'ตั้งค่าทั่วไป (แจ้งผู้ดูแลระบบ)';
+  const miss = c => [!c.passport && 'เลขพาสปอร์ต', !c.passport_exp && 'วันหมดอายุพาสปอร์ต', !c.sirb_no && 'เลข Seaman book', !c.sirb_exp && 'วันหมดอายุ Seaman book', !nKind(c, 'passport') && 'ไฟล์พาสปอร์ต', !nKind(c, 'sirb') && 'ไฟล์ Seaman book', !nKind(c, 'ticket') && 'ไฟล์ตั๋วเครื่องบิน'].filter(Boolean);
+  const opt = (name, label, has, on_, none) => `<label class="f chk"><input type="checkbox" name="${name}" ${has ? (on_ ? 'checked' : '') : 'disabled'}><span>${label}</span></label>${has ? '' : `<div class="okhint">${none} เพิ่มได้ที่ ${where}</div>`}`;
+  openDialog(`<form class="dlg-form wide" id="oktbf">${dlgHead('สร้างเอกสาร OK TO BOARD')}<div class="dlg-b">
+    <div class="oksec">ลูกเรือในจดหมาย · ${esc(j.vessel)}</div>
+    <div class="okcrew">${on.map(c => { const m = miss(c); return `<label class="okc"><input type="checkbox" name="crew" value="${c.id}" ${!keep || o.crew.includes(c.id) ? 'checked' : ''}><span><b>${esc(c.name)}</b><span class="sub">${esc(c.rank || '—')}${c.flight ? ' · ' + esc(c.flight) : ''}</span>${m.length ? `<span class="okmiss">ยังขาด ${esc(m.join(' · '))}</span>` : '<span class="okfull">ข้อมูลและไฟล์ครบ</span>'}</span></label>`; }).join('')}</div>
+    <div class="okhint">ยังขาดก็สร้างเอกสารได้ ช่องที่ไม่มีข้อมูลจะเว้นว่างในจดหมาย · เติมได้ที่ <a href="/jobs/${j.id}/1" data-link>ขั้นตอนที่ 1</a>${j.port ? '' : ' · งานนี้ยังไม่ระบุท่าเรือ แก้ได้ที่ปุ่มดินสอบนการ์ดเรือ'}</div>
+    <div class="form" style="margin-top:14px">
+      <label class="f" style="grid-column:1 / -1">ถึง (สายการบิน)<input name="to" maxlength="200" value="${esc(o.to || '')}" placeholder="เช่น Cathay Pacific Airways"></label>
+      <label class="f">วันที่ในจดหมาย<input type="date" name="date" required value="${esc(o.date || today)}"></label>
+      <label class="f">วันที่เรือเข้าเทียบท่า<input type="date" name="call_date" value="${esc(o.call_date || ymdOf(j.etb || j.eta))}"></label>
+      ${saved && o.date !== today ? `<div class="okhint" style="grid-column:1 / -1">วันที่ในจดหมายเป็นค่าที่บันทึกไว้ครั้งก่อน ถ้าออกเอกสารใหม่วันนี้ (${dateTh(Date.now())}) ให้แก้วันที่ก่อน</div>` : ''}
+      <label class="f" style="grid-column:1 / -1">เที่ยวบิน (บรรทัดละ 1 เที่ยว)<textarea name="flights" rows="3" maxlength="2000" placeholder="เช่น CX974 19SEP MNL-HKG 0530-0750 LT.">${esc(saved ? o.flights : flightsOf(on))}</textarea></label>
+      <label class="f" style="grid-column:1 / -1">ชื่อบริษัทในจดหมาย<input name="company" maxlength="200" required value="${esc(o.company || A.settings.company.name)}"></label>
+      <label class="f">ผู้ประสานงาน (P.I.C)<input name="pic_name" maxlength="120" value="${esc(o.pic_name || s.pic_name)}"></label>
+      <label class="f">เบอร์โทร<input name="pic_mobile" maxlength="60" inputmode="tel" value="${esc(o.pic_mobile || s.pic_mobile)}"></label>
+    </div>
+    <div class="okopts">
+      ${opt('letterhead', 'ใส่หัวจดหมายบริษัท', br.letterhead, !saved || o.letterhead, 'ยังไม่ได้อัปโหลดหัวจดหมาย')}
+      ${opt('sign', 'ใส่ลายเซ็นและตราประทับ', br.signature || br.stamp, !saved || o.sign, 'ยังไม่ได้อัปโหลดลายเซ็นและตราประทับ')}
+      <label class="f chk"><input type="checkbox" name="attach" ${!saved || o.attach ? 'checked' : ''}><span>แนบสำเนาเอกสารของลูกเรือต่อท้าย</span></label>
+    </div>
+    <div class="okprev" id="okprev" hidden></div>
+    </div><div class="fstat" role="status"></div><div class="ferr" role="alert"></div>
+    <div class="dlg-f wrap"><button type="button" class="btn line" data-close>ปิด</button><button type="button" class="btn line" data-act="o-oktbprev">${icon('eye')}ดูตัวอย่างหน้าแรก</button><button type="submit" class="btn">${icon('download')}ดาวน์โหลด PDF</button></div></form>`, async (fd, form) => { await makeOktb(form, true); return true; });
+  const form = document.getElementById('oktbf'), prev = document.getElementById('okprev');
+  document.getElementById('dlg').addEventListener('close', () => { if (prev.dataset.url) URL.revokeObjectURL(prev.dataset.url); }, { once: true });
+  let auto = !saved;
+  form.elements.flights.addEventListener('input', () => { auto = false; });
+  form.addEventListener('change', e => {
+    if (e.target.name !== 'crew' || !auto) return;
+    const ids = new FormData(form).getAll('crew').map(Number);
+    form.elements.flights.value = flightsOf(on.filter(c => ids.includes(c.id)));
+  });
+}
+
+async function makeOktb(form, download) {
+  const fd = new FormData(form), j = J.job;
+  const ids = fd.getAll('crew').map(Number), crew = J.crew.filter(c => ids.includes(c.id));
+  const stat = form.querySelector('.fstat'), btns = [...form.querySelectorAll('.dlg-f button:not([data-close])')];
+  const v = { to: fd.get('to').trim(), date: fd.get('date'), call_date: fd.get('call_date'), flights: fd.get('flights').trim(), company: fd.get('company').trim(), pic_name: fd.get('pic_name').trim(), pic_mobile: fd.get('pic_mobile').trim(), letterhead: fd.get('letterhead') === 'on', sign: fd.get('sign') === 'on', attach: fd.get('attach') === 'on', crew: crew.map(c => c.id) };
+  stat.textContent = '';
+  if (!crew.length) throw new Error('เลือกลูกเรืออย่างน้อย 1 คน');
+  if (!v.date) throw new Error('กรุณาใส่วันที่ในจดหมาย');
+  if (!v.company) throw new Error('กรุณาใส่ชื่อบริษัทในจดหมาย');
+  btns.forEach(b => { b.disabled = true; });
+  try {
+    stat.textContent = 'กำลังเตรียมเอกสาร...';
+    if (!closed()) { await api('PATCH', `/api/jobs/${j.id}`, { oktb: v }); j.oktb = v; }
+    const M = await import('../oktb.js');
+    const brand = {};
+    for (const k of [v.letterhead && 'letterhead', v.sign && 'signature', v.sign && 'stamp']) if (k && A.brand[k]) brand[k] = await apiBytes(`/api/brand/${k}`);
+    const L = M.letterData(j, crew, { ...DEFAULT_OKTB, ...A.settings.oktb }, v);
+    if (!download) {
+      const pages = await M.renderLetter(L, brand);
+      const box = document.getElementById('okprev');
+      if (box.dataset.url) URL.revokeObjectURL(box.dataset.url);
+      box.dataset.url = URL.createObjectURL(await M.pageBlob(pages[0]));
+      box.innerHTML = `<div class="sub">ตัวอย่างหน้าแรก${pages.length > 1 ? ` · จดหมายยาว ${pages.length} หน้า` : ''}</div><img src="${box.dataset.url}" alt="ตัวอย่างจดหมาย OK TO BOARD">`;
+      box.hidden = false;
+      await box.querySelector('img').decode().catch(() => {});
+      box.scrollIntoView({ block: 'start' });
+      stat.textContent = closed() ? 'ตัวอย่างหน้าแรกอยู่ด้านบน' : 'ตัวอย่างหน้าแรกอยู่ด้านบน · บันทึกตัวเลือกไว้กับงานนี้แล้ว';
+      return;
+    }
+    const list = v.attach ? M.packFiles(crew) : [], files = [];
+    for (const [i, f] of list.entries()) {
+      stat.textContent = `กำลังโหลดไฟล์แนบ ${i + 1} จาก ${list.length} · ${f.name}`;
+      try { files.push({ ...f, ...(await apiBytes(`/api/files/${f.id}`)) }); } catch (e) { throw new Error(`โหลดไฟล์แนบไม่ได้: ${f.crew} · ${f.name} (${e.message})`); }
+    }
+    stat.textContent = 'กำลังรวมเป็น PDF ไฟล์เดียว...';
+    const name = M.packName(j.vessel, v.date);
+    saveFile(await M.buildPack(L, brand, files, `OK TO BOARD ${j.vessel}`), name, 'application/pdf');
+    stat.textContent = `ดาวน์โหลด ${name} แล้ว ไฟล์อยู่ในโฟลเดอร์ดาวน์โหลดของเครื่อง`;
+  } catch (e) {
+    stat.textContent = '';
+    throw e;
+  } finally {
+    btns.forEach(b => { b.disabled = false; });
+  }
 }
 
 const findCrew = id => J.crew.find(c => c.id === +id);
@@ -319,9 +445,26 @@ export const actions = {
     await refresh();
   },
   'o-editcrew'(t) { crewDialog(findCrew(t.dataset.id)); },
+  'o-files'(t) { filesDialog(findCrew(t.dataset.id)); },
+  async 'o-delfile'(t) {
+    if (!window.confirm(`ลบไฟล์ "${t.dataset.name}" ?`)) return;
+    t.disabled = true;
+    const note = { kind: t.dataset.kind };
+    try { await api('DELETE', `/api/files/${t.dataset.id}`); note.ok = 'ลบไฟล์แล้ว'; } catch (e) { note.bad = [e.message]; }
+    await reloadFiles(t.dataset.crew, note);
+  },
+  async 'o-oktb'() {
+    await reloadRefs().catch(() => {});
+    oktbDialog();
+  },
+  async 'o-oktbprev'(t) {
+    const form = t.closest('form'), err = form.querySelector('.ferr');
+    err.textContent = '';
+    try { await makeOktb(form, false); } catch (e) { err.textContent = e.message || 'สร้างตัวอย่างไม่สำเร็จ'; }
+  },
   'o-delcrew'(t) {
     const c = findCrew(t.dataset.id);
-    openDialog(`<form class="dlg-form">${dlgHead('ลบลูกเรือ')}<div class="dlg-b"><p>ลบ <b>${esc(c.name)}</b> ออกจากงานนี้? เวลา หมายเหตุ และรูปของลูกเรือคนนี้จะถูกลบด้วย</p></div>${dlgFoot('ลบลูกเรือ')}</form>`, async () => {
+    openDialog(`<form class="dlg-form">${dlgHead('ลบลูกเรือ')}<div class="dlg-b"><p>ลบ <b>${esc(c.name)}</b> ออกจากงานนี้? เวลา หมายเหตุ รูป และไฟล์เอกสารของลูกเรือคนนี้จะถูกลบด้วย</p></div>${dlgFoot('ลบลูกเรือ')}</form>`, async () => {
       await api('DELETE', `/api/crew/${c.id}`);
       await refresh('ลบลูกเรือแล้ว');
     });
@@ -366,7 +509,7 @@ export const actions = {
   },
   async 'o-reopen'() { await patchJob({ status: 'open' }, 'เปิดงานอีกครั้งแล้ว'); },
   'o-deljob'() {
-    openDialog(`<form class="dlg-form">${dlgHead('ลบงานถาวร')}<div class="dlg-b"><p>ลบงาน <b>${esc(J.job.vessel)}</b> พร้อมลูกเรือ เวลา และรูปทั้งหมด กู้คืนไม่ได้ (ข้อมูลที่อยู่ในไฟล์สำรองรายเดือนยังอยู่)</p><label class="f">พิมพ์ชื่อเรือเพื่อยืนยัน<input name="confirm" required autocomplete="off"></label></div>${dlgFoot('ลบถาวร')}</form>`, async fd => {
+    openDialog(`<form class="dlg-form">${dlgHead('ลบงานถาวร')}<div class="dlg-b"><p>ลบงาน <b>${esc(J.job.vessel)}</b> พร้อมลูกเรือ เวลา รูป และสำเนาพาสปอร์ต Seaman book ตั๋วเครื่องบินทั้งหมด กู้คืนไม่ได้ (ข้อมูลที่อยู่ในไฟล์สำรองรายเดือนยังอยู่)</p><label class="f">พิมพ์ชื่อเรือเพื่อยืนยัน<input name="confirm" required autocomplete="off"></label></div>${dlgFoot('ลบถาวร')}</form>`, async fd => {
       if (String(fd.get('confirm')).trim().toUpperCase() !== J.job.vessel) throw new Error('ชื่อเรือไม่ตรง');
       await api('DELETE', `/api/jobs/${J.job.id}`);
       J = null;
@@ -383,7 +526,29 @@ export const changes = {
     await api('PATCH', `/api/crew/${t.dataset.id}`, { [f]: v });
     await refresh(f === 'agent_id' ? (v ? 'มอบหมายแล้ว ลูกเรือขึ้นในมือถือของผู้ดูแลทันที' : 'ยกเลิกการมอบหมายแล้ว') : 'บันทึกแล้ว');
   },
-  'o-tpl'(t) { A.ui.tpl = t.value; A.ui.mailEdited = false; render(true); }
+  'o-tpl'(t) { A.ui.tpl = t.value; A.ui.mailEdited = false; render(true); },
+  async 'o-upfile'(t) {
+    const files = [...(t.files || [])], id = +t.dataset.id, kind = t.dataset.kind;
+    t.value = '';
+    if (!files.length) return;
+    const box = document.getElementById('fgroups'), stat = t.closest('.fgroup').querySelector('.fstat');
+    t.closest('.fgroup').querySelector('.ferr').textContent = '';
+    box.classList.add('busy');
+    box.querySelectorAll('input, button').forEach(e => { e.disabled = true; });
+    const bad = [];
+    let done = 0;
+    for (const [i, f] of files.entries()) {
+      stat.textContent = `กำลังอัปโหลด ${i + 1} จาก ${files.length} · ${f.name}`;
+      try {
+        const type = uploadType(f, DOC_TYPES);
+        if (!type) throw new Error('รองรับเฉพาะไฟล์รูป JPG / PNG / WEBP และ PDF');
+        if (f.size > 10 * 1024 * 1024) throw new Error('ไฟล์ใหญ่เกิน 10 MB');
+        await api('POST', `/api/crew/${id}/files?kind=${kind}&name=${encodeURIComponent(f.name)}`, new Blob([f], { type }));
+        done++;
+      } catch (e) { bad.push(`${f.name}: ${e.message}`); }
+    }
+    await reloadFiles(id, { kind, ok: done ? `แนบแล้ว ${done} ไฟล์` : '', bad });
+  }
 };
 
 document.addEventListener('submit', async e => {

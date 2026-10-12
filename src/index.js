@@ -1,9 +1,13 @@
-import { HttpError, json, readJson, randomId, now, str, text, ms, intOrNull, parseJson, bkk, bkkParts } from './util.js';
+import { HttpError, json, readJson, randomId, now, str, text, ms, ymd, intOrNull, parseJson, bkk, bkkParts } from './util.js';
 import { login, logout, currentUser, sessionCookie, hashPassword, checkPasswordRules, publicUser, isOffice, seesAllCrew, requireUser, requireOffice, requireAdmin } from './auth.js';
-import { DEFAULTS, EDITABLE, loadSettings } from './settings.js';
+import { DEFAULTS, EDITABLE, BRAND_KINDS, loadSettings, loadBrand } from './settings.js';
 import { buildXlsx } from './xlsx.js';
 
 const MAX_PHOTO = 10 * 1024 * 1024;
+const MAX_BRAND = 2 * 1024 * 1024;
+const FILE_KINDS = { passport: 'พาสปอร์ต', sirb: 'Seaman book', ticket: 'ตั๋วเครื่องบิน', other: 'อื่น ๆ' };
+const FILE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf' };
+const BRAND_LABEL = { letterhead: 'หัวจดหมาย', signature: 'ลายเซ็น', stamp: 'ตราประทับ' };
 const JOB_FIELDS = ['vessel', 'port', 'owner', 'owner_email', 'agent', 'agent_email', 'remark'];
 const JOB_TIMES = ['eta', 'etb', 'etd', 'imm_deadline'];
 const SENT_KEYS = ['appoint', 'sched', 'gate', 'plan', 'owner'];
@@ -47,7 +51,7 @@ async function route(req, env, url) {
   const u = await currentUser(req, env);
   requireUser(u);
 
-  if (p === '/api/me' && m === 'GET') return json(await boot(env, u));
+  if (p === '/api/me' && m === 'GET') return json(await bootFor(env, u));
   if (p === '/api/me/password' && m === 'POST') return changeOwnPassword(req, env, u);
   if (p === '/api/jobs' && m === 'GET') return listJobs(env, u, url);
   if (p === '/api/jobs' && m === 'POST') return createJob(req, env, u);
@@ -72,11 +76,22 @@ async function route(req, env, url) {
     if (seg[2] === 'undo' && m === 'POST') return undo(req, env, u, id);
     if (seg[2] === 'notes' && m === 'POST') return addNote(req, env, u, id);
     if (seg[2] === 'photos' && m === 'POST') return addPhoto(req, env, u, id, url);
+    if (seg[2] === 'files' && m === 'POST') return addFile(req, env, u, id, url);
   }
   if (seg[0] === 'photos' && seg[1]) {
     const id = intOrNull(seg[1]);
     if (m === 'GET') return getPhoto(env, u, id);
     if (m === 'DELETE') return deletePhoto(env, u, id);
+  }
+  if (seg[0] === 'files' && seg.length === 2) {
+    const id = intOrNull(seg[1]);
+    if (m === 'GET') return getFile(env, u, id);
+    if (m === 'DELETE') return deleteFile(env, u, id);
+  }
+  if (seg[0] === 'brand' && seg.length === 2) {
+    if (m === 'GET') return getBrand(env, u, seg[1]);
+    if (m === 'PUT') return putBrand(req, env, u, seg[1]);
+    if (m === 'DELETE') return deleteBrand(env, u, seg[1]);
   }
   if (seg[0] === 'users') {
     if (seg.length === 1 && m === 'GET') return listUsers(env, u);
@@ -269,6 +284,13 @@ function validateSetting(k, v) {
     if (!ok) throw new HttpError(400, 'ข้อความอีเมลไม่ถูกต้อง');
     return Object.fromEntries(kinds.map(x => [x, text(v[x], 4000)]));
   }
+  if (k === 'oktb') {
+    const keys = Object.keys(def);
+    const ok = v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length
+      && keys.every(x => typeof v[x] === 'string' && v[x].length <= 2000);
+    if (!ok) throw new HttpError(400, 'ตั้งค่าเอกสาร OK TO BOARD ไม่ถูกต้อง');
+    return Object.fromEntries(keys.map(x => [x, text(v[x], 2000)]));
+  }
   throw new HttpError(400, 'ตั้งค่านี้ไม่ได้');
 }
 
@@ -281,7 +303,7 @@ async function getJob(env, id) {
 }
 
 function jobOut(j) {
-  return { ...j, services: parseJson(j.services, []), steps: parseJson(j.steps, []), sent: parseJson(j.sent, {}) };
+  return { ...j, services: parseJson(j.services, []), steps: parseJson(j.steps, []), sent: parseJson(j.sent, {}), oktb: parseJson(j.oktb, {}) };
 }
 
 async function listJobs(env, u, url) {
@@ -351,6 +373,7 @@ async function patchJob(req, env, u, id) {
     }
     sets.sent = JSON.stringify(sent);
   }
+  if ('oktb' in b) sets.oktb = JSON.stringify(oktbOptions(b.oktb));
   if ('status' in b) {
     if (!['open', 'closed'].includes(b.status)) throw new HttpError(400, 'สถานะไม่ถูกต้อง');
     if (b.status !== j.status) {
@@ -370,10 +393,19 @@ async function patchJob(req, env, u, id) {
   return json({ ok: true });
 }
 
+function oktbOptions(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new HttpError(400, 'รูปแบบไม่ถูกต้อง');
+  const crew = Array.isArray(v.crew) ? [...new Set(v.crew.filter(n => Number.isInteger(n) && n > 0))].slice(0, 200) : [];
+  return {
+    to: str(v.to, 200), date: ymd(v.date), call_date: ymd(v.call_date), flights: text(v.flights, 2000), company: str(v.company, 200),
+    pic_name: str(v.pic_name, 120), pic_mobile: str(v.pic_mobile, 60), letterhead: !!v.letterhead, sign: !!v.sign, attach: !!v.attach, crew
+  };
+}
+
 async function deleteJob(env, u, id) {
   requireAdmin(u);
   await getJob(env, id);
-  const { results } = await env.DB.prepare('SELECT p.r2_key FROM photos p JOIN crew c ON c.id = p.crew_id WHERE c.job_id = ?').bind(id).all();
+  const { results } = await env.DB.prepare('SELECT p.r2_key FROM photos p JOIN crew c ON c.id = p.crew_id WHERE c.job_id = ? UNION ALL SELECT f.r2_key FROM crew_files f JOIN crew c ON c.id = f.crew_id WHERE c.job_id = ?').bind(id, id).all();
   for (let i = 0; i < results.length; i += 900) await env.FILES.delete(results.slice(i, i + 900).map(r => r.r2_key));
   await env.DB.prepare('DELETE FROM jobs WHERE id = ?').bind(id).run();
   return json({ ok: true });
@@ -402,18 +434,20 @@ async function log(env, jobId, userId, t, kind = 'log') {
   await env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) VALUES (?, ?, ?, ?, ?)').bind(jobId, now(), userId, kind, t).run();
 }
 
-async function crewRows(env, where, binds) {
+async function crewRows(env, where, binds, withFiles = false) {
   const { results: crew } = await env.DB.prepare(`SELECT * FROM crew WHERE ${where} ORDER BY job_id, CASE type WHEN 'on' THEN 0 ELSE 1 END, sort, id`).bind(...binds).all();
   if (!crew.length) return [];
   const ids = crew.map(c => c.id);
   const [cps, notes, photos] = await Promise.all(['checkpoints', 'notes', 'photos'].map(t => inChunks(env, `SELECT * FROM ${t} WHERE crew_id IN`, ids, t === 'checkpoints' ? 'ORDER BY idx' : 'ORDER BY at')));
   const by = (arr) => { const m = new Map(); for (const r of arr) { if (!m.has(r.crew_id)) m.set(r.crew_id, []); m.get(r.crew_id).push(r); } return m; };
   const mc = by(cps), mn = by(notes), mp = by(photos);
+  const mf = withFiles ? by(await inChunks(env, 'SELECT id, crew_id, kind, name, mime, size, at FROM crew_files WHERE crew_id IN', ids, 'ORDER BY at, id')) : null;
   return crew.map(c => ({
     ...c, docs: parseJson(c.docs, {}), s4: parseJson(c.s4, {}),
     cps: (mc.get(c.id) || []).map(x => ({ idx: x.idx, name: x.name, name_en: x.name_en, plan: x.plan_at, actual: x.actual_at, by: x.actual_by })),
     notes: (mn.get(c.id) || []).map(x => ({ id: x.id, at: x.at, by: x.user_id, text: x.text })),
-    photos: (mp.get(c.id) || []).map(x => ({ id: x.id, at: x.at, by: x.user_id, point: x.point, lat: x.lat, lng: x.lng }))
+    photos: (mp.get(c.id) || []).map(x => ({ id: x.id, at: x.at, by: x.user_id, point: x.point, lat: x.lat, lng: x.lng })),
+    ...(mf ? { files: (mf.get(c.id) || []).map(x => ({ id: x.id, kind: x.kind, name: x.name, mime: x.mime, size: x.size, at: x.at })) } : {})
   }));
 }
 
@@ -433,10 +467,10 @@ async function jobFull(env, u, id) {
     const mine = seesAllCrew(u) ? true : await env.DB.prepare('SELECT 1 FROM crew WHERE job_id = ? AND agent_id = ? LIMIT 1').bind(id, u.id).first();
     if (!mine) throw new HttpError(403, 'บัญชีนี้ไม่มีสิทธิ์ดูงานนี้');
   }
-  const crew = await crewRows(env, isOffice(u) || seesAllCrew(u) ? 'job_id = ?' : 'job_id = ? AND agent_id = ?', isOffice(u) || seesAllCrew(u) ? [id] : [id, u.id]);
+  const crew = await crewRows(env, isOffice(u) || seesAllCrew(u) ? 'job_id = ?' : 'job_id = ? AND agent_id = ?', isOffice(u) || seesAllCrew(u) ? [id] : [id, u.id], isOffice(u));
   const job = jobOut(j);
   if (!isOffice(u)) {
-    for (const k of ['owner_token', 'owner_email', 'agent_email', 'remark']) delete job[k];
+    for (const k of ['owner_token', 'owner_email', 'agent_email', 'remark', 'oktb']) delete job[k];
     return { job, crew: crew.map(fieldSafe), activity: [], now: now() };
   }
   const { results: activity } = await env.DB.prepare('SELECT a.at, a.kind, a.text, a.user_id, u.name AS who FROM activity a LEFT JOIN users u ON u.id = a.user_id WHERE a.job_id = ? ORDER BY a.at DESC, a.id DESC LIMIT 150').bind(id).all();
@@ -444,7 +478,7 @@ async function jobFull(env, u, id) {
 }
 
 function fieldSafe(c) {
-  const { passport, ...rest } = c;
+  const { passport, passport_exp, sirb_no, sirb_exp, files, ...rest } = c;
   return rest;
 }
 
@@ -496,7 +530,7 @@ async function addCrew(req, env, u, jobId) {
     if (!name) throw new HttpError(400, 'กรุณากรอกชื่อลูกเรือให้ครบทุกคน');
     const type = x.type === 'off' ? 'off' : 'on';
     const tpl = type === 'on' ? settings.cp_on : settings.cp_off;
-    return { name, type, tpl, agent: intOrNull(x.agent_id), chain: Math.min(tpl.length - 1, type === 'on' ? settings.cp_on_chain : settings.cp_off_chain), x };
+    return { name, type, tpl, agent: intOrNull(x.agent_id), chain: Math.min(tpl.length - 1, type === 'on' ? settings.cp_on_chain : settings.cp_off_chain), passport_exp: ymd(x.passport_exp), sirb_exp: ymd(x.sirb_exp), x };
   });
   const agents = [...new Set(rows.map(r => r.agent).filter(Boolean))];
   for (const a of agents) if (!(await env.DB.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'field'").bind(a).first())) throw new HttpError(400, 'ไม่พบพนักงานผู้ดูแลที่เลือก');
@@ -505,8 +539,8 @@ async function addCrew(req, env, u, jobId) {
   const t = now();
   for (const r of rows) {
     crewStmt.push(stmts.length);
-    stmts.push(env.DB.prepare('INSERT INTO crew (job_id, name, rank, type, nationality, flight, passport, agent_id, chain_end, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(jobId, r.name, str(r.x.rank, 40), r.type, str(r.x.nationality, 60), str(r.x.flight, 40), str(r.x.passport, 40), r.agent, r.chain, t));
+    stmts.push(env.DB.prepare('INSERT INTO crew (job_id, name, rank, type, nationality, flight, passport, passport_exp, sirb_no, sirb_exp, agent_id, chain_end, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(jobId, r.name, str(r.x.rank, 40), r.type, str(r.x.nationality, 60), str(r.x.flight, 40), str(r.x.passport, 40), r.passport_exp, str(r.x.sirb_no, 40), r.sirb_exp, r.agent, r.chain, t));
     r.tpl.forEach((cp, i) => stmts.push(env.DB.prepare('INSERT INTO checkpoints (crew_id, idx, name, name_en) VALUES ((SELECT MAX(id) FROM crew WHERE job_id = ?), ?, ?, ?)').bind(jobId, i, cp.th, cp.en)));
   }
   const res = await env.DB.batch(stmts);
@@ -522,7 +556,8 @@ async function patchCrew(req, env, u, id) {
   const b = await readJson(req);
   const sets = {};
   const logs = [];
-  for (const [f, max] of [['name', 120], ['rank', 40], ['nationality', 60], ['flight', 40], ['passport', 40], ['room', 20]]) if (f in b) sets[f] = str(b[f], max);
+  for (const [f, max] of [['name', 120], ['rank', 40], ['nationality', 60], ['flight', 40], ['passport', 40], ['sirb_no', 40], ['room', 20]]) if (f in b) sets[f] = str(b[f], max);
+  for (const f of ['passport_exp', 'sirb_exp']) if (f in b) sets[f] = ymd(b[f]);
   if ('name' in sets && !sets.name) throw new HttpError(400, 'กรุณากรอกชื่อลูกเรือ');
   if ('sort' in b) sets.sort = Math.round(Number(b.sort) || 0);
   const settings = await loadSettings(env);
@@ -576,8 +611,8 @@ async function deleteCrew(env, u, id) {
   requireOffice(u);
   const c = await getCrew(env, id);
   openJob(c);
-  const { results } = await env.DB.prepare('SELECT r2_key FROM photos WHERE crew_id = ?').bind(id).all();
-  if (results.length) await env.FILES.delete(results.map(r => r.r2_key));
+  const { results } = await env.DB.prepare('SELECT r2_key FROM photos WHERE crew_id = ? UNION ALL SELECT r2_key FROM crew_files WHERE crew_id = ?').bind(id, id).all();
+  for (let i = 0; i < results.length; i += 900) await env.FILES.delete(results.slice(i, i + 900).map(r => r.r2_key));
   await env.DB.batch([
     env.DB.prepare('DELETE FROM crew WHERE id = ?').bind(id),
     env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) VALUES (?, ?, ?, ?, ?)').bind(c.job_id, now(), u.id, 'log', `ลบลูกเรือ ${c.name}`)
@@ -676,9 +711,7 @@ async function addPhoto(req, env, u, id, url) {
   const buf = await req.arrayBuffer();
   if (!buf.byteLength) throw new HttpError(400, 'ไม่พบไฟล์รูป');
   if (buf.byteLength > MAX_PHOTO) throw new HttpError(413, 'รูปใหญ่เกิน 10 MB');
-  const settings = await loadSettings(env);
-  const used = await env.DB.prepare('SELECT COALESCE(SUM(size), 0) AS n FROM photos').first();
-  if (used.n + buf.byteLength > settings.storage_gb * 1024 ** 3) throw new HttpError(507, 'พื้นที่เก็บไฟล์เต็มแล้ว กรุณาแจ้งผู้ดูแลระบบ');
+  await checkStorage(env, buf.byteLength);
   const key = `photos/${c.job_id}/${id}/${Date.now()}-${randomId(8)}.${type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg'}`;
   await env.FILES.put(key, buf, { httpMetadata: { contentType: type } });
   const point = str(url.searchParams.get('point'), 80);
@@ -713,6 +746,123 @@ async function deletePhoto(env, u, id) {
   await env.DB.prepare('DELETE FROM photos WHERE id = ?').bind(id).run();
   await log(env, p.job_id, u.id, 'ลบรูปที่แนบ', 'photo');
   return json({ ok: true });
+}
+
+/* ---------- crew documents & brand images ---------- */
+
+async function bootFor(env, u) {
+  const d = await boot(env, u);
+  if (isOffice(u)) return { ...d, brand: await loadBrand(env) };
+  delete d.settings.oktb;
+  return d;
+}
+
+async function checkStorage(env, add) {
+  const settings = await loadSettings(env);
+  const used = await env.DB.prepare('SELECT (SELECT COALESCE(SUM(size), 0) FROM photos) + (SELECT COALESCE(SUM(size), 0) FROM crew_files) AS n').first();
+  if (used.n + add > settings.storage_gb * 1024 ** 3) throw new HttpError(507, 'พื้นที่เก็บไฟล์เต็มแล้ว กรุณาแจ้งผู้ดูแลระบบ');
+}
+
+function looksLike(b, type) {
+  const at = (sig, o) => sig.every((x, i) => b[o + i] === x);
+  if (type === 'image/jpeg') return at([0xff, 0xd8, 0xff], 0);
+  if (type === 'image/png') return at([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  if (type === 'image/webp') return at([0x52, 0x49, 0x46, 0x46], 0) && at([0x57, 0x45, 0x42, 0x50], 8);
+  for (let i = 0; i + 5 <= b.length; i++) if (at([0x25, 0x50, 0x44, 0x46, 0x2d], i)) return true;
+  return false;
+}
+
+async function rawFile(req, types, max, typeMsg, bigMsg) {
+  const type = (req.headers.get('content-type') || '').split(';')[0].trim();
+  if (!types.includes(type)) throw new HttpError(415, typeMsg);
+  if (Number(req.headers.get('content-length') || 0) > max) throw new HttpError(413, bigMsg);
+  const buf = await req.arrayBuffer();
+  if (!buf.byteLength) throw new HttpError(400, 'ไม่พบไฟล์');
+  if (buf.byteLength > max) throw new HttpError(413, bigMsg);
+  if (!looksLike(new Uint8Array(buf, 0, Math.min(buf.byteLength, 1024)), type)) throw new HttpError(400, 'ไฟล์เสียหาย หรือเนื้อไฟล์ไม่ตรงกับชนิดไฟล์');
+  return { type, buf };
+}
+
+async function addFile(req, env, u, id, url) {
+  requireOffice(u);
+  const c = await getCrew(env, id);
+  openJob(c);
+  const kind = url.searchParams.get('kind');
+  if (!Object.hasOwn(FILE_KINDS, kind)) throw new HttpError(400, 'ประเภทเอกสารไม่ถูกต้อง');
+  const { type, buf } = await rawFile(req, Object.keys(FILE_TYPES), MAX_PHOTO, 'รองรับเฉพาะไฟล์รูป JPG / PNG / WEBP และ PDF', 'ไฟล์ใหญ่เกิน 10 MB');
+  await checkStorage(env, buf.byteLength);
+  const ext = FILE_TYPES[type];
+  const name = str(url.searchParams.get('name'), 160).replace(/[\\/:*?"<>|]+/g, '_') || `${kind}.${ext}`;
+  const key = `docs/${c.job_id}/${id}/${Date.now()}-${randomId(8)}.${ext}`;
+  await env.FILES.put(key, buf, { httpMetadata: { contentType: type } });
+  let r;
+  try {
+    r = await env.DB.prepare('INSERT INTO crew_files (crew_id, kind, name, mime, r2_key, size, at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(id, kind, name, type, key, buf.byteLength, now(), u.id).run();
+  } catch (e) {
+    await env.FILES.delete(key);
+    throw e;
+  }
+  await log(env, c.job_id, u.id, `${c.name} · แนบไฟล์ ${FILE_KINDS[kind]}`);
+  return json({ id: r.meta.last_row_id });
+}
+
+async function fileRow(env, id) {
+  const f = await env.DB.prepare('SELECT f.*, c.name AS crew_name, c.job_id, j.status AS job_status FROM crew_files f JOIN crew c ON c.id = f.crew_id JOIN jobs j ON j.id = c.job_id WHERE f.id = ?').bind(id).first();
+  if (!f) throw new HttpError(404, 'ไม่พบไฟล์นี้');
+  return f;
+}
+
+const fileHeaders = type => ({ 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'" });
+
+async function getFile(env, u, id) {
+  requireOffice(u);
+  const f = await fileRow(env, id);
+  const obj = await env.FILES.get(f.r2_key);
+  if (!obj) throw new HttpError(404, 'ไม่พบไฟล์นี้');
+  const name = encodeURIComponent(f.name).replace(/['()*]/g, ch => '%' + ch.charCodeAt(0).toString(16).toUpperCase());
+  return new Response(obj.body, { headers: { ...fileHeaders(f.mime), 'content-disposition': `inline; filename*=UTF-8''${name}` } });
+}
+
+async function deleteFile(env, u, id) {
+  requireOffice(u);
+  const f = await fileRow(env, id);
+  openJob(f);
+  await env.FILES.delete(f.r2_key);
+  await env.DB.prepare('DELETE FROM crew_files WHERE id = ?').bind(id).run();
+  await log(env, f.job_id, u.id, `${f.crew_name} · ลบไฟล์ ${FILE_KINDS[f.kind]}`);
+  return json({ ok: true });
+}
+
+function brandKind(kind) {
+  if (!BRAND_KINDS.includes(kind)) throw new HttpError(404, 'ไม่พบรายการนี้');
+  return 'brand/' + kind;
+}
+
+async function setBrand(env, kind, at) {
+  const brand = { ...(await loadBrand(env)), [kind]: at };
+  await env.DB.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('brand', JSON.stringify(brand)).run();
+  return json({ brand });
+}
+
+async function getBrand(env, u, kind) {
+  requireOffice(u);
+  const obj = await env.FILES.get(brandKind(kind));
+  if (!obj) throw new HttpError(404, `ยังไม่ได้อัปโหลด${BRAND_LABEL[kind]}`);
+  return new Response(obj.body, { headers: fileHeaders(obj.httpMetadata?.contentType || 'image/png') });
+}
+
+async function putBrand(req, env, u, kind) {
+  requireAdmin(u);
+  const key = brandKind(kind);
+  const { type, buf } = await rawFile(req, ['image/png', 'image/jpeg'], MAX_BRAND, 'รองรับเฉพาะไฟล์รูป PNG / JPG', 'รูปใหญ่เกิน 2 MB');
+  await env.FILES.put(key, buf, { httpMetadata: { contentType: type } });
+  return setBrand(env, kind, now());
+}
+
+async function deleteBrand(env, u, kind) {
+  requireAdmin(u);
+  await env.FILES.delete(brandKind(kind));
+  return setBrand(env, kind, 0);
 }
 
 /* ---------- owner page ---------- */
@@ -770,14 +920,14 @@ async function exportJob(env, u, id) {
     ['Status', j.status === 'closed' ? 'Closed ' + bkk(j.closed_at) : 'Open'],
     ['Exported', bkk(now()) + ' (Bangkok time)']
   ];
-  const crewSheet = [['No.', 'Name', 'Rank', 'Type', 'Nationality', 'Flight', 'Passport', 'Vehicle', 'Driver', 'Hotel', 'Room', 'Boarding agent', ...settings.docs.map(d => 'Doc: ' + d)],
-    ...crew.map((c, i) => { const v = veh.get(c.vehicle_id); return [i + 1, c.name, c.rank, c.type === 'on' ? 'On signer' : 'Off signer', c.nationality, c.flight, c.passport, v ? `${v.name} ${v.plate}` : '', v ? v.driver : '', hot.get(c.hotel_id) || '', c.room, uName.get(c.agent_id) || '', ...settings.docs.map(d => (c.docs[d] ? 'Yes' : 'No'))]; })];
+  const crewSheet = [['No.', 'Name', 'Rank', 'Type', 'Nationality', 'Flight', 'Passport', 'Passport expiry', 'SIRB no.', 'SIRB expiry', 'Vehicle', 'Driver', 'Hotel', 'Room', 'Boarding agent', ...settings.docs.map(d => 'Doc: ' + d)],
+    ...crew.map((c, i) => { const v = veh.get(c.vehicle_id); return [i + 1, c.name, c.rank, c.type === 'on' ? 'On signer' : 'Off signer', c.nationality, c.flight, c.passport, c.passport_exp, c.sirb_no, c.sirb_exp, v ? `${v.name} ${v.plate}` : '', v ? v.driver : '', hot.get(c.hotel_id) || '', c.room, uName.get(c.agent_id) || '', ...settings.docs.map(d => (c.docs[d] ? 'Yes' : 'No'))]; })];
   const log = [['Name', 'Rank', 'Type', 'Checkpoint', 'Checkpoint (EN)', 'Plan', 'Actual', 'Diff (min)', 'Result', 'Confirmed by'],
     ...crew.flatMap(c => c.cps.map(x => { const d = x.actual != null && x.plan != null ? Math.round((x.actual - x.plan) / 60000) : ''; return [c.name, c.rank, c.type === 'on' ? 'On signer' : 'Off signer', x.name, x.name_en, bkk(x.plan), bkk(x.actual), d, x.actual == null ? '' : d !== '' && d > late ? 'Late' : 'On time', uName.get(x.by) || '']; }))];
   const notes = [['Name', 'Time', 'Note', 'By'], ...crew.flatMap(c => c.notes.map(n => [c.name, bkk(n.at), n.text, uName.get(n.by) || '']))];
   return xlsxResponse([
     { name: 'Summary', rows: summary, widths: [30, 50], header: false },
-    { name: 'Crew', rows: crewSheet, widths: [5, 26, 10, 12, 14, 12, 14, 18, 18, 28, 8, 18, 14, 14, 14] },
+    { name: 'Crew', rows: crewSheet, widths: [5, 26, 10, 12, 14, 12, 14, 14, 14, 14, 18, 18, 28, 8, 18, 14, 14, 14] },
     { name: 'Time log', rows: log, widths: [26, 10, 12, 24, 24, 18, 18, 10, 10, 18] },
     { name: 'Notes', rows: notes, widths: [26, 18, 60, 18] }
   ], `${j.vessel.replace(/[^A-Za-z0-9]+/g, '-')}-${fileDate()}.xlsx`);
@@ -798,7 +948,7 @@ async function allData(env) {
   const jobName = new Map(jobs.results.map(x => [x.id, x.vessel]));
   return [
     { name: 'Jobs', rows: [['Job ID', 'Vessel', 'Port', 'Owner', 'Owner email', 'Local agent', 'Agent email', 'ETA', 'ETB', 'ETD', 'Status', 'Created', 'Closed'], ...jobs.results.map(j => [j.id, j.vessel, j.port, j.owner, j.owner_email, j.agent, j.agent_email, bkk(j.eta), bkk(j.etb), bkk(j.etd), j.status, bkk(j.created_at), bkk(j.closed_at)])], widths: [8, 26, 18, 22, 26, 22, 26, 17, 17, 17, 8, 17, 17] },
-    { name: 'Crew', rows: [['Crew ID', 'Job ID', 'Vessel', 'Name', 'Rank', 'Type', 'Nationality', 'Flight', 'Passport', 'Room', 'Boarding agent'], ...crew.results.map(c => [c.id, c.job_id, jobName.get(c.job_id) || '', c.name, c.rank, c.type, c.nationality, c.flight, c.passport, c.room, uName.get(c.agent_id) || ''])], widths: [8, 8, 24, 26, 10, 6, 14, 12, 14, 8, 18] },
+    { name: 'Crew', rows: [['Crew ID', 'Job ID', 'Vessel', 'Name', 'Rank', 'Type', 'Nationality', 'Flight', 'Passport', 'Passport expiry', 'SIRB no.', 'SIRB expiry', 'Room', 'Boarding agent'], ...crew.results.map(c => [c.id, c.job_id, jobName.get(c.job_id) || '', c.name, c.rank, c.type, c.nationality, c.flight, c.passport, c.passport_exp, c.sirb_no, c.sirb_exp, c.room, uName.get(c.agent_id) || ''])], widths: [8, 8, 24, 26, 10, 6, 14, 12, 14, 14, 14, 14, 8, 18] },
     { name: 'Time log', rows: [['Job ID', 'Vessel', 'Name', 'No.', 'Checkpoint', 'Plan', 'Actual', 'Diff (min)', 'By'], ...cps.results.map(x => { const c = crewName.get(x.crew_id) || {}; return [c.job_id || '', jobName.get(c.job_id) || '', c.name || '', x.idx + 1, x.name, bkk(x.plan_at), bkk(x.actual_at), x.plan_at && x.actual_at ? Math.round((x.actual_at - x.plan_at) / 60000) : '', uName.get(x.actual_by) || '']; })], widths: [8, 24, 26, 5, 24, 17, 17, 10, 18] },
     { name: 'Activity', rows: [['Time', 'Job ID', 'Vessel', 'User', 'Detail'], ...activity.results.map(a => [bkk(a.at), a.job_id, jobName.get(a.job_id) || '', a.who || '', a.text])], widths: [17, 8, 24, 18, 70] },
     { name: 'Users', rows: [['ID', 'Username', 'Name', 'Role', 'Title', 'Phone', 'Active'], ...users.results.map(x => [x.id, x.username, x.name, x.role, x.title, x.phone, x.active ? 'Yes' : 'No'])], widths: [5, 18, 24, 10, 22, 14, 8] },
@@ -807,7 +957,7 @@ async function allData(env) {
   ];
 }
 
-export const DUMP_TABLES = ['users', 'settings', 'vehicles', 'hotels', 'jobs', 'crew', 'checkpoints', 'notes', 'photos', 'activity'];
+export const DUMP_TABLES = ['users', 'settings', 'vehicles', 'hotels', 'jobs', 'crew', 'checkpoints', 'notes', 'photos', 'crew_files', 'activity'];
 const DAILY_KEEP = 35;
 
 async function listBackups(env, u) {

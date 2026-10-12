@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { png, pdf } from './gen.mjs';
 
 const PORT = 8931;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -303,6 +304,232 @@ test('email templates are editable by the admin only', async () => {
   assert.deepEqual((await admin('PUT', '/api/settings', { mail_tpl: def })).data.settings.mail_tpl, def);
 });
 
+const PRIVATE = ['TEST-PP-778899', 'SIRB-TEST', '2031-04-17', '2029-12-01', 'scan-test'];
+const leaks = data => PRIVATE.filter(x => JSON.stringify(data).includes(x));
+const raw = (type, extra = {}) => ({ headers: { 'content-type': type, ...extra } });
+
+test('passport expiry and seaman book fields are saved, validated and exported', async () => {
+  let r = await office('POST', `/api/jobs/${S.job}/crew`, { crew: [{ name: 'Doc Tester', rank: '3/O', type: 'on', passport: 'TEST-PP-778899', passport_exp: '2031-04-17', sirb_no: 'SIRB-TEST-445566', sirb_exp: '2029-12-01', agent_id: S.somsak }] });
+  assert.equal(r.status, 200);
+  S.cd = r.data.ids[0];
+  const read = async () => (await office('GET', `/api/jobs/${S.job}`)).data.crew.find(c => c.id === S.cd);
+  let c = await read();
+  assert.deepEqual([c.passport_exp, c.sirb_no, c.sirb_exp], ['2031-04-17', 'SIRB-TEST-445566', '2029-12-01']);
+  assert.deepEqual(c.files, []);
+  const before = (await office('GET', `/api/jobs/${S.job}`)).data.crew.length;
+  for (const bad of ['17/04/2031', '2031-4-17', '2031-02-30', 'soon', 20310417]) assert.equal((await office('POST', `/api/jobs/${S.job}/crew`, { crew: [{ name: 'Bad Date', passport_exp: bad }] })).status, 400, 'create refuses ' + bad);
+  assert.equal((await office('POST', `/api/jobs/${S.job}/crew`, { crew: [{ name: 'Bad Date', sirb_exp: '2029-13-01' }] })).status, 400);
+  assert.equal((await office('GET', `/api/jobs/${S.job}`)).data.crew.length, before, 'a refused date adds nobody');
+  assert.equal((await office('PATCH', `/api/crew/${S.cd}`, { sirb_exp: '2029-02-30' })).status, 400);
+  assert.equal((await office('PATCH', `/api/crew/${S.cd}`, { passport_exp: '01-05-2032' })).status, 400);
+  assert.deepEqual([(c = await read()).passport_exp, c.sirb_exp], ['2031-04-17', '2029-12-01'], 'refused edits change nothing');
+  assert.equal((await office('PATCH', `/api/crew/${S.cd}`, { passport_exp: '', sirb_no: '  SIRB-TEST-999  ', sirb_exp: '2030-06-30' })).status, 200);
+  assert.deepEqual([(c = await read()).passport_exp, c.sirb_no, c.sirb_exp], ['', 'SIRB-TEST-999', '2030-06-30']);
+  assert.equal((await office('PATCH', `/api/crew/${S.cd}`, { passport_exp: '2031-04-17', sirb_exp: '2029-12-01' })).status, 200);
+  assert.equal((await field('PATCH', `/api/crew/${S.cd}`, { sirb_no: 'x' })).status, 403);
+  const txt = Buffer.from((await office('GET', `/api/jobs/${S.job}/export.xlsx`)).data).toString('utf8');
+  assert.ok(txt.includes('Passport expiry') && txt.includes('SIRB no.') && txt.includes('SIRB expiry') && txt.includes('SIRB-TEST-999') && txt.includes('2031-04-17'), 'excel has the new columns');
+});
+
+test('crew documents: office uploads an image and a PDF with type, content and size checks', async () => {
+  const img = png(40, 26), doc = pdf(['SAMPLE E-TICKET page 1', 'SAMPLE E-TICKET page 2']);
+  const name = 'scan-test พาสปอร์ต (1).png';
+  let r = await office('POST', `/api/crew/${S.cd}/files?kind=passport&name=${encodeURIComponent(name)}`, img, raw('image/png'));
+  assert.equal(r.status, 200);
+  S.f1 = r.data.id;
+  r = await office('POST', `/api/crew/${S.cd}/files?kind=ticket&name=scan-test-ticket.pdf`, doc, raw('application/pdf'));
+  assert.equal(r.status, 200);
+  S.f2 = r.data.id;
+  const full = (await office('GET', `/api/jobs/${S.job}`)).data;
+  const files = full.crew.find(c => c.id === S.cd).files;
+  assert.deepEqual(files.map(f => [f.id, f.kind, f.name, f.mime, f.size]), [[S.f1, 'passport', name, 'image/png', img.length], [S.f2, 'ticket', 'scan-test-ticket.pdf', 'application/pdf', doc.length]]);
+  assert.deepEqual(Object.keys(files[0]).sort(), ['at', 'id', 'kind', 'mime', 'name', 'size'], 'storage keys are not sent to the browser');
+  assert.ok(Math.abs(files[0].at - Date.now()) < 10000);
+  assert.ok(full.activity.some(a => a.text === 'Doc Tester · แนบไฟล์ พาสปอร์ต') && full.activity.some(a => a.text === 'Doc Tester · แนบไฟล์ ตั๋วเครื่องบิน'));
+
+  r = await office('GET', `/api/files/${S.f1}`);
+  assert.equal(r.status, 200);
+  assert.deepEqual([...r.data], [...img]);
+  assert.equal(r.headers.get('content-type'), 'image/png');
+  assert.equal(r.headers.get('cache-control'), 'no-store');
+  assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(r.headers.get('content-security-policy'), "default-src 'none'");
+  assert.equal(r.headers.get('content-disposition'), "inline; filename*=UTF-8''scan-test%20%E0%B8%9E%E0%B8%B2%E0%B8%AA%E0%B8%9B%E0%B8%AD%E0%B8%A3%E0%B9%8C%E0%B8%95%20%281%29.png");
+  r = await office('GET', `/api/files/${S.f2}`);
+  assert.equal(r.headers.get('content-type'), 'application/pdf');
+  assert.deepEqual([...r.data], [...doc]);
+  assert.equal((await admin('GET', `/api/files/${S.f2}`)).status, 200);
+
+  const up = (q, body, type) => office('POST', `/api/crew/${S.cd}/files?${q}`, body, raw(type));
+  assert.equal((await up('kind=passport&name=a.txt', new Uint8Array([1, 2, 3]), 'text/plain')).status, 415);
+  assert.equal((await up('kind=passport&name=a.heic', img, 'image/heic')).status, 415);
+  assert.equal((await up('kind=passport&name=a.html', new TextEncoder().encode('<script>alert(1)</script>'), 'text/html')).status, 415);
+  assert.equal((await up('kind=passport&name=fake.png', new TextEncoder().encode('<script>alert(1)</script>'), 'image/png')).status, 400, 'content must match the declared type');
+  assert.equal((await up('kind=ticket&name=fake.pdf', img, 'application/pdf')).status, 400);
+  assert.equal((await up('kind=visa&name=a.png', img, 'image/png')).status, 400, 'unknown document kind');
+  assert.equal((await up('name=a.png', img, 'image/png')).status, 400);
+  assert.equal((await up('kind=passport&name=a.png', new Uint8Array(0), 'image/png')).status, 400);
+  const big = new Uint8Array(10 * 1024 * 1024 + 1);
+  big.set(img.subarray(0, 8));
+  r = await up('kind=passport&name=big.png', big, 'image/png');
+  assert.equal(r.status, 413);
+  assert.ok(r.data.error.includes('10 MB'));
+  assert.equal((await office('POST', '/api/crew/999999/files?kind=passport', img, raw('image/png'))).status, 404);
+  assert.equal((await office('GET', '/api/files/999999')).status, 404);
+  assert.equal((await office('GET', `/api/jobs/${S.job}`)).data.crew.find(c => c.id === S.cd).files.length, 2, 'refused uploads store nothing');
+  r = await up('kind=other&name=' + encodeURIComponent('..\\..\\evil/name?.jpg'), new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 0xff, 0xd9]), 'image/jpeg');
+  assert.equal(r.status, 200);
+  S.f3 = r.data.id;
+  assert.equal((await office('GET', `/api/jobs/${S.job}`)).data.crew.find(c => c.id === S.cd).files[2].name, '.._.._evil_name_.jpg', 'path characters are removed from file names');
+});
+
+test('field staff, the Owner link and visitors cannot reach documents or the new personal fields', async () => {
+  const img = png(8, 8);
+  const lead = client();
+  const u2 = (await admin('GET', '/api/users')).data.users.find(x => x.username === 'user2');
+  assert.equal((await admin('PATCH', `/api/users/${u2.id}`, { see_all: true })).status, 200);
+  assert.equal((await lead('POST', '/api/login', { username: 'user2', password: 'field12345' })).status, 200);
+  for (const [who, call, code] of [['assigned field agent', field, 403], ['field supervisor who sees all crew', lead, 403], ['visitor', anon, 401]]) {
+    assert.equal((await call('POST', `/api/crew/${S.cd}/files?kind=passport&name=x.png`, img, raw('image/png'))).status, code, who + ' upload');
+    for (const id of [S.f1, S.f2]) {
+      const r = await call('GET', `/api/files/${id}`);
+      assert.equal(r.status, code, who + ' fetch');
+      assert.ok(r.data.error && !('length' in r.data), who + ' gets an error message, not file bytes');
+    }
+    assert.equal((await call('DELETE', `/api/files/${S.f1}`)).status, code, who + ' delete');
+    assert.equal((await call('GET', '/api/brand/letterhead')).status, code, who + ' brand image');
+  }
+  assert.equal((await fetch(BASE + `/api/files/${S.f1}`)).status, 401, 'no cookie, no header');
+  assert.equal((await office('GET', `/api/jobs/${S.job}`)).data.crew.find(c => c.id === S.cd).files.length, 3, 'nothing was added or removed');
+
+  for (const [who, call] of [['agent', field], ['supervisor', lead]]) {
+    const list = (await call('GET', '/api/field')).data;
+    const jv = (await call('GET', `/api/jobs/${S.job}`)).data;
+    for (const c of [list.crew.find(x => x.id === S.cd), jv.crew.find(x => x.id === S.cd)]) {
+      assert.ok(c, who + ' is allowed to see this crew member');
+      for (const k of ['files', 'passport', 'passport_exp', 'sirb_no', 'sirb_exp']) assert.ok(!(k in c), `${who} payload has no ${k}`);
+    }
+    assert.deepEqual(leaks(list), [], who + ' field list');
+    assert.deepEqual(leaks(jv), [], who + ' job view');
+    assert.equal(jv.job.oktb, undefined);
+    const me = (await call('GET', '/api/me')).data;
+    assert.equal(me.brand, undefined);
+    assert.equal(me.settings.oktb, undefined);
+  }
+  const token = (await office('GET', `/api/jobs/${S.job}`)).data.job.owner_token;
+  const pub = await anon('GET', `/api/public/${token}`);
+  assert.equal(pub.status, 200);
+  assert.ok(pub.data.crew.some(c => c.name === 'Doc Tester'));
+  assert.deepEqual(leaks(pub.data), [], 'owner link');
+  assert.ok(pub.data.crew.every(c => !('files' in c) && !('passport_exp' in c) && !('sirb_no' in c) && !('sirb_exp' in c)));
+  assert.ok(!JSON.stringify(pub.data).includes('oktb'));
+  assert.deepEqual(leaks((await office('GET', `/api/jobs/${S.job}`)).data).sort(), [...PRIVATE].sort(), 'the same check does find the data in the office view');
+  assert.equal((await admin('PATCH', `/api/users/${u2.id}`, { see_all: false })).status, 200);
+});
+
+test('deleting a document or a crew member removes the stored files', async () => {
+  let r = await office('DELETE', `/api/files/${S.f3}`);
+  assert.equal(r.status, 200);
+  assert.equal((await office('GET', `/api/files/${S.f3}`)).status, 404);
+  assert.equal((await office('DELETE', `/api/files/${S.f3}`)).status, 404);
+  let full = (await office('GET', `/api/jobs/${S.job}`)).data;
+  assert.deepEqual(full.crew.find(c => c.id === S.cd).files.map(f => f.id), [S.f1, S.f2]);
+  assert.ok(full.activity.some(a => a.text === 'Doc Tester · ลบไฟล์ อื่น ๆ'));
+  const tmp = (await office('POST', `/api/jobs/${S.job}/crew`, { crew: [{ name: 'Temp Docs', type: 'on' }] })).data.ids[0];
+  const ids = [];
+  for (const kind of ['passport', 'sirb']) ids.push((await office('POST', `/api/crew/${tmp}/files?kind=${kind}&name=t.png`, png(6, 6), raw('image/png'))).data.id);
+  assert.equal((await office('GET', `/api/files/${ids[1]}`)).status, 200);
+  assert.equal((await office('DELETE', `/api/crew/${tmp}`)).status, 200);
+  for (const id of ids) assert.equal((await office('GET', `/api/files/${id}`)).status, 404, 'file rows go with the crew member');
+  const job = (await office('POST', '/api/jobs', { vessel: 'MV DELETE ME' })).data.id;
+  const who = (await office('POST', `/api/jobs/${job}/crew`, { crew: [{ name: 'Gone Soon', type: 'on' }] })).data.ids[0];
+  r = await office('POST', `/api/crew/${who}/files?kind=passport&name=gone.png`, png(6, 6), raw('image/png'));
+  assert.equal((await office('GET', `/api/files/${r.data.id}`)).status, 200);
+  assert.equal((await office('DELETE', `/api/jobs/${job}`)).status, 403, 'only the admin deletes a job');
+  assert.equal((await admin('DELETE', `/api/jobs/${job}`)).status, 200);
+  assert.equal((await office('GET', `/api/files/${r.data.id}`)).status, 404, 'file rows go with the job');
+  assert.equal((await office('GET', `/api/files/${S.f1}`)).status, 200, 'other crew keep their files');
+});
+
+test('a job keeps the last OK TO BOARD options', async () => {
+  const opt = { to: 'Example Airways', date: '2026-09-18', call_date: '2026-09-19', flights: 'EX974 19SEP MNL-HKG 0530-0750 LT.\nEX701 19SEP HKG-BKK 0900-1100 LT.', company: 'Example Agency Co., Ltd.', pic_name: 'คุณทดสอบ', pic_mobile: '081-000-0000', letterhead: false, sign: true, attach: true, crew: [S.c1, S.cd] };
+  assert.deepEqual((await office('GET', `/api/jobs/${S.job}`)).data.job.oktb, {});
+  assert.equal((await office('PATCH', `/api/jobs/${S.job}`, { oktb: { ...opt, flights: opt.flights.replace('\n', '\r\n'), junk: 1 } })).status, 200);
+  assert.deepEqual((await office('GET', `/api/jobs/${S.job}`)).data.job.oktb, opt);
+  for (const bad of [{ ...opt, date: '18/09/2026' }, { ...opt, call_date: '2026-02-31' }, 'text', [], null]) assert.equal((await office('PATCH', `/api/jobs/${S.job}`, { oktb: bad })).status, 400);
+  assert.equal((await field('PATCH', `/api/jobs/${S.job}`, { oktb: opt })).status, 403);
+  assert.deepEqual((await office('GET', `/api/jobs/${S.job}`)).data.job.oktb, opt, 'refused writes change nothing');
+  assert.equal((await office('PATCH', `/api/jobs/${S.job}`, { oktb: { to: 'x'.repeat(500), date: '', crew: [S.c1, 'x', -1, 2.5, S.c1], letterhead: 1 } })).status, 200);
+  const o = (await office('GET', `/api/jobs/${S.job}`)).data.job.oktb;
+  assert.deepEqual([o.to.length, o.date, o.crew, o.letterhead, o.sign, o.flights], [200, '', [S.c1], true, false, '']);
+  assert.equal((await office('PATCH', `/api/jobs/${S.job}`, { oktb: opt })).status, 200);
+});
+
+test('letterhead, signature and stamp: admin uploads, office reads, field cannot', async () => {
+  const head = png(60, 12), sign = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 9, 9, 9, 0xff, 0xd9]);
+  assert.deepEqual((await office('GET', '/api/me')).data.brand, { letterhead: 0, signature: 0, stamp: 0 });
+  assert.equal((await office('GET', '/api/brand/letterhead')).status, 404);
+  assert.equal((await office('PUT', '/api/brand/letterhead', head, raw('image/png'))).status, 403);
+  assert.equal((await field('PUT', '/api/brand/letterhead', head, raw('image/png'))).status, 403);
+  assert.equal((await anon('PUT', '/api/brand/letterhead', head, raw('image/png'))).status, 401);
+  assert.equal((await office('GET', '/api/me')).data.brand.letterhead, 0);
+  let r = await admin('PUT', '/api/brand/letterhead', head, raw('image/png'));
+  assert.equal(r.status, 200);
+  assert.ok(r.data.brand.letterhead > Date.now() - 10000 && r.data.brand.signature === 0);
+  assert.equal((await admin('PUT', '/api/brand/signature', sign, raw('image/jpeg'))).status, 200);
+  assert.equal((await admin('PUT', '/api/brand/stamp', head, raw('image/webp'))).status, 415);
+  assert.equal((await admin('PUT', '/api/brand/stamp', pdf(['x']), raw('application/pdf'))).status, 415);
+  assert.equal((await admin('PUT', '/api/brand/stamp', new TextEncoder().encode('not an image'), raw('image/png'))).status, 400);
+  assert.equal((await admin('PUT', '/api/brand/logo', head, raw('image/png'))).status, 404);
+  const big = new Uint8Array(2 * 1024 * 1024 + 1);
+  big.set(head.subarray(0, 8));
+  assert.equal((await admin('PUT', '/api/brand/stamp', big, raw('image/png'))).status, 413);
+  r = await office('GET', '/api/brand/letterhead');
+  assert.equal(r.status, 200);
+  assert.deepEqual([...r.data], [...head]);
+  assert.deepEqual([r.headers.get('content-type'), r.headers.get('cache-control'), r.headers.get('x-content-type-options')], ['image/png', 'no-store', 'nosniff']);
+  assert.equal((await office('GET', '/api/brand/signature')).headers.get('content-type'), 'image/jpeg');
+  assert.equal((await office('GET', '/api/brand/stamp')).status, 404);
+  assert.equal((await field('GET', '/api/brand/letterhead')).status, 403);
+  assert.equal((await anon('GET', '/api/brand/letterhead')).status, 401);
+  const b = (await office('GET', '/api/me')).data.brand;
+  assert.ok(b.letterhead > 0 && b.signature > 0 && b.stamp === 0);
+  assert.equal((await field('GET', '/api/me')).data.brand, undefined);
+  r = await admin('PUT', '/api/settings', { brand: { letterhead: 0, signature: 0, stamp: 123 } });
+  assert.equal(r.data.settings.brand, undefined);
+  assert.deepEqual((await office('GET', '/api/me')).data.brand, b, 'the settings form cannot change which images exist');
+  assert.equal((await office('DELETE', '/api/brand/signature')).status, 403);
+  assert.equal((await field('DELETE', '/api/brand/signature')).status, 403);
+  r = await admin('DELETE', '/api/brand/signature');
+  assert.deepEqual([r.status, r.data.brand.signature, r.data.brand.letterhead], [200, 0, b.letterhead]);
+  assert.equal((await office('GET', '/api/brand/signature')).status, 404);
+});
+
+test('OK TO BOARD letter settings are validated and editable by the admin only', async () => {
+  const def = (await admin('GET', '/api/me')).data.settings.oktb;
+  assert.deepEqual(Object.keys(def), ['pic_name', 'pic_mobile', 'signer_name', 'signer_title', 'footer', 'subject', 'intro', 'guarantee']);
+  assert.deepEqual([def.signer_title, def.footer, def.subject], ['Operation', 'As Agents Only, E.&.O.E.', 'Letter of Guarantee / OK to Board']);
+  assert.ok(['{{company}}', '{{vessel}}', '{{port}}', '{{call_date}}'].every(v => def.intro.includes(v)) && def.guarantee.includes('{{company}} is sponsoring him'));
+  const mine = { ...def, pic_name: 'คุณทดสอบ', pic_mobile: '081-000-0000', signer_name: 'Test Signer', guarantee: 'Line one {{company}}\r\n\r\nLine two  ' };
+  let r = await admin('PUT', '/api/settings', { oktb: mine });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data.settings.oktb, { ...mine, guarantee: 'Line one {{company}}\n\nLine two' });
+  assert.equal((await office('GET', '/api/me')).data.settings.oktb.signer_name, 'Test Signer');
+  const { footer, ...missing } = def;
+  assert.equal((await admin('PUT', '/api/settings', { oktb: missing })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { oktb: { ...def, pic_mobile: 81000 } })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { oktb: { ...def, intro: 'x'.repeat(2001) } })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { oktb: { ...def, extra: 'x' } })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { oktb: { ...missing, extra: 'x' } })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { oktb: [] })).status, 400);
+  assert.equal((await admin('PUT', '/api/settings', { oktb: 'text' })).status, 400);
+  assert.equal((await office('PUT', '/api/settings', { oktb: def })).status, 403);
+  assert.equal((await field('PUT', '/api/settings', { oktb: def })).status, 403);
+  assert.equal((await admin('GET', '/api/me')).data.settings.oktb.signer_name, 'Test Signer', 'refused writes change nothing');
+  assert.equal((await admin('PUT', '/api/settings', { oktb: { ...def, intro: 'x'.repeat(2000) } })).status, 200, '2000 characters is allowed');
+  assert.deepEqual((await admin('PUT', '/api/settings', { oktb: def })).data.settings.oktb, def);
+});
+
 test('settings validation and closing a job', async () => {
   assert.equal((await admin('PUT', '/api/settings', { late_min: 0 })).status, 400);
   const r = await admin('PUT', '/api/settings', { late_min: 15, docs: ['Passport', 'Seaman book', 'ตั๋วเครื่องบิน', 'Visa'] });
@@ -313,6 +540,18 @@ test('settings validation and closing a job', async () => {
   assert.equal((await field('GET', '/api/field')).data.crew.length, 0, 'closed jobs leave the field list');
   const closed = (await office('GET', '/api/jobs?status=closed')).data.jobs;
   assert.equal(closed.length, 1);
+});
+
+test('a closed job refuses document upload and delete but the office can still open the files', async () => {
+  const r = await office('POST', `/api/crew/${S.cd}/files?kind=sirb&name=late.png`, png(6, 6), raw('image/png'));
+  assert.equal(r.status, 409);
+  assert.ok(r.data.error.includes('ปิดแล้ว'));
+  assert.equal((await office('DELETE', `/api/files/${S.f1}`)).status, 409);
+  assert.equal((await admin('DELETE', `/api/files/${S.f2}`)).status, 409);
+  assert.equal((await office('PATCH', `/api/crew/${S.cd}`, { sirb_no: 'changed' })).status, 409);
+  assert.equal((await office('GET', `/api/files/${S.f1}`)).status, 200);
+  assert.deepEqual((await office('GET', `/api/jobs/${S.job}`)).data.crew.find(c => c.id === S.cd).files.map(f => f.id), [S.f1, S.f2]);
+  assert.equal((await field('GET', `/api/files/${S.f1}`)).status, 403);
 });
 
 test('monthly backup is written on the 1st (Bangkok time)', async () => {
@@ -337,7 +576,7 @@ test('nightly backup restores into an empty database with identical data', async
   execFileSync('node', ['scripts/backup-to-sql.mjs', gz, sql], sh);
   execFileSync(WR, ['wrangler', 'd1', 'migrations', 'apply', 'cct', '--local', '--persist-to', db], sh);
   execFileSync(WR, ['wrangler', 'd1', 'execute', 'cct', '--local', '--persist-to', db, '--file', sql], sh);
-  const count = where => { const out = execFileSync(WR, ['wrangler', 'd1', 'execute', 'cct', '--local', '--persist-to', where, '--json', '--command', `"SELECT (SELECT COUNT(*) FROM users) u, (SELECT COUNT(*) FROM jobs) j, (SELECT COUNT(*) FROM crew) c, (SELECT COUNT(*) FROM checkpoints) k, (SELECT COUNT(*) FROM notes) n, (SELECT COUNT(*) FROM photos) p, (SELECT COUNT(*) FROM activity) a, (SELECT SUM(actual_at) FROM checkpoints) s"`], sh).toString(); return JSON.parse(out.slice(out.indexOf('[')))[0].results[0]; };
+  const count = where => { const out = execFileSync(WR, ['wrangler', 'd1', 'execute', 'cct', '--local', '--persist-to', where, '--json', '--command', `"SELECT (SELECT COUNT(*) FROM users) u, (SELECT COUNT(*) FROM jobs) j, (SELECT COUNT(*) FROM crew) c, (SELECT COUNT(*) FROM checkpoints) k, (SELECT COUNT(*) FROM notes) n, (SELECT COUNT(*) FROM photos) p, (SELECT COUNT(*) FROM activity) a, (SELECT SUM(actual_at) FROM checkpoints) s, (SELECT COUNT(*) FROM crew_files) f, (SELECT SUM(size) FROM crew_files) fs, (SELECT COUNT(*) FROM crew WHERE LENGTH(passport_exp) = 10 AND LENGTH(sirb_exp) = 10) x, (SELECT COUNT(*) FROM jobs WHERE LENGTH(oktb) > 2) o"`], sh).toString(); return JSON.parse(out.slice(out.indexOf('[')))[0].results[0]; };
   const restored = count(db);
   const live = JSON.parse(Buffer.from(gunzipSync(f.data)).toString('utf8')).tables;
   assert.equal(restored.u, live.users.length);
@@ -346,6 +585,25 @@ test('nightly backup restores into an empty database with identical data', async
   assert.equal(restored.a, live.activity.length);
   assert.equal(restored.s, live.checkpoints.reduce((x, r) => x + (r.actual_at || 0), 0));
   assert.ok(restored.j >= 1 && restored.p >= 1 && restored.n >= 1, 'jobs, photos and notes restored');
+  assert.equal(live.crew_files.length, 2, 'the backup lists the crew documents');
+  assert.equal(restored.f, live.crew_files.length);
+  assert.equal(restored.fs, live.crew_files.reduce((x, r) => x + r.size, 0));
+  assert.ok(live.crew_files.every(r => r.r2_key.startsWith('docs/') && r.name.startsWith('scan-test')));
+  assert.equal(restored.x, 1, 'passport and seaman book expiry dates restored');
+  assert.equal(restored.o, 1, 'OK TO BOARD options restored');
+  assert.ok(live.settings.some(r => r.key === 'brand'), 'the backup records which brand images exist');
+
+  const old = { format: 'cct-backup', version: 1, created: Date.now(), tables: { ...live } };
+  delete old.tables.crew_files;
+  old.tables.crew = live.crew.map(({ passport_exp, sirb_no, sirb_exp, ...r }) => r);
+  old.tables.jobs = live.jobs.map(({ oktb, ...r }) => r);
+  const oldJson = join(dir, 'old.json'), oldSql = join(dir, 'old.sql');
+  writeFileSync(oldJson, JSON.stringify(old));
+  execFileSync('node', ['scripts/backup-to-sql.mjs', oldJson, oldSql], sh);
+  execFileSync(WR, ['wrangler', 'd1', 'execute', 'cct', '--local', '--persist-to', db, '--file', oldSql], sh);
+  const before = count(db);
+  assert.deepEqual([before.u, before.c, before.k, before.a, before.s], [restored.u, restored.c, restored.k, restored.a, restored.s], 'a backup made before this version still restores');
+  assert.deepEqual([before.f, before.x, before.o], [0, 0, 0]);
   rmSync(dir, { recursive: true, force: true });
 });
 

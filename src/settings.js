@@ -1,5 +1,5 @@
 import { parseJson } from './util.js';
-import { DEFAULT_TPL } from '../public/js/core.js';
+import { DEFAULT_TPL, DEFAULT_OKTB } from '../public/js/core.js';
 
 export const DEFAULTS = {
   company: {
@@ -33,14 +33,22 @@ export const DEFAULTS = {
     { th: 'เครื่องออก', en: 'Departed', gap: 120 }
   ],
   cp_off_chain: 3,
-  mail_tpl: DEFAULT_TPL
+  mail_tpl: DEFAULT_TPL,
+  oktb: DEFAULT_OKTB
 };
 
 export const EDITABLE = Object.keys(DEFAULTS);
+export const BRAND_KINDS = ['letterhead', 'signature', 'stamp'];
 
 export async function loadSettings(env) {
   const { results } = await env.DB.prepare('SELECT key, value FROM settings').all();
   const s = structuredClone(DEFAULTS);
   for (const r of results) if (r.key in s) s[r.key] = parseJson(r.value, s[r.key]);
   return s;
+}
+
+export async function loadBrand(env) {
+  const r = await env.DB.prepare("SELECT value FROM settings WHERE key = 'brand'").first();
+  const v = parseJson(r && r.value, {});
+  return Object.fromEntries(BRAND_KINDS.map(k => [k, Number(v[k]) || 0]));
 }

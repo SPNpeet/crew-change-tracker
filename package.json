@@ -12,6 +12,7 @@
     "test:e2e": "node tests/e2e/e2e-ui.mjs",
     "test:e2e:audit": "node tests/e2e/audit-app.mjs",
     "test:e2e:offline": "node tests/e2e/offline.mjs",
+    "test:e2e:oktb": "node tests/e2e/oktb.mjs",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

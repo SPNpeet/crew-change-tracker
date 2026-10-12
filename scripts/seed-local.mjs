@@ -29,14 +29,14 @@ await call('POST', '/api/hotels', { name: 'Sriracha Bay Hotel' });
 const job = (await call('POST', '/api/jobs', { vessel: 'MT OCEAN MERIDIAN', port: 'Laem Chabang B3', owner: 'Blue Harbour Shipping', owner_email: 'ops@blueharbour.example', agent: 'LCB Marine Agency', agent_email: 'ops@lcbmarine.example', eta: t(600), etb: t(690), etd: t(1560), imm_deadline: t(320) })).id;
 await call('PATCH', `/api/jobs/${job}`, { eta: t(600), source: 'LCB Marine Agency · อีเมล' });
 const crew = [
-  ['Rafael Mendoza', 'Master', 'on', 'Filipino', 'PR 732', 'P1234567A', [-180, -135, -120, -110, -30, 600, 690, 720], [7, 10, 5, 8, 4], somsak, v1, h1, '512', 1],
-  ['Arun Pillai', 'C/O', 'on', 'Indian', 'AI 332', 'Z9876543', [-90, -45, -30, -20, 60, 600, 690, 720], [8, 6, 5], somsak, v1, h1, '514', 0],
-  ['Tran Minh Duc', '2/E', 'on', 'Vietnamese', 'VN 615', 'C4567890', [-200, -160, -145, -135, -60, 600, 690, 720], [3, 6, 4, 2, 5], somsak, v1, h1, '515', 1],
-  ['Joel Castillo', 'AB', 'on', 'Filipino', 'PR 740', '', [90, 135, 150, 160, 240, 600, 690, 720], [], somsak, v2, null, '', 0],
-  ['Oleg Marchenko', 'Master', 'off', 'Ukrainian', 'TG 974', 'FE123456', [780, 800, 810, 840, 1500, 1560, 1680], [], wichai, v2, h1, '520', 1],
-  ['Somchai Wongdee', 'Bosun', 'off', 'Thai', 'FD 3012', 'AA1122334', [780, 800, 810, 840, 1500, 1545, 1650], [], wichai, v2, h1, '521', 1]
+  ['Rafael Mendoza', 'Master', 'on', 'Filipino', 'PR 732', 'P1234567A', [-180, -135, -120, -110, -30, 600, 690, 720], [7, 10, 5, 8, 4], somsak, v1, h1, '512', 1, '2032-04-17', 'B0123456', '2030-11-02'],
+  ['Arun Pillai', 'C/O', 'on', 'Indian', 'AI 332', 'Z9876543', [-90, -45, -30, -20, 60, 600, 690, 720], [8, 6, 5], somsak, v1, h1, '514', 0, '2031-08-09', 'MUM 334455', '2029-05-21'],
+  ['Tran Minh Duc', '2/E', 'on', 'Vietnamese', 'VN 615', 'C4567890', [-200, -160, -145, -135, -60, 600, 690, 720], [3, 6, 4, 2, 5], somsak, v1, h1, '515', 1, '2030-01-30', 'VN-778812', '2028-12-15'],
+  ['Joel Castillo', 'AB', 'on', 'Filipino', 'PR 740', '', [90, 135, 150, 160, 240, 600, 690, 720], [], somsak, v2, null, '', 0, '', '', ''],
+  ['Oleg Marchenko', 'Master', 'off', 'Ukrainian', 'TG 974', 'FE123456', [780, 800, 810, 840, 1500, 1560, 1680], [], wichai, v2, h1, '520', 1, '2029-06-11', 'AB 445566', '2027-09-30'],
+  ['Somchai Wongdee', 'Bosun', 'off', 'Thai', 'FD 3012', 'AA1122334', [780, 800, 810, 840, 1500, 1545, 1650], [], wichai, v2, h1, '521', 1, '2033-02-28', 'TH-990011', '2030-07-07']
 ];
-const ids = (await call('POST', `/api/jobs/${job}/crew`, { crew: crew.map(c => ({ name: c[0], rank: c[1], type: c[2], nationality: c[3], flight: c[4], passport: c[5], agent_id: c[8] })) })).ids;
+const ids = (await call('POST', `/api/jobs/${job}/crew`, { crew: crew.map(c => ({ name: c[0], rank: c[1], type: c[2], nationality: c[3], flight: c[4], passport: c[5], agent_id: c[8], passport_exp: c[13], sirb_no: c[14], sirb_exp: c[15] })) })).ids;
 for (let i = 0; i < crew.length; i++) {
   const c = crew[i], id = ids[i];
   await call('PATCH', `/api/crew/${id}`, { vehicle_id: c[9], hotel_id: c[10], room: c[11], docs: c[12] ? { Passport: 1, 'Seaman book': 1, 'ตั๋วเครื่องบิน': 1 } : { Passport: 1, 'Seaman book': i === 3 ? 1 : 0, 'ตั๋วเครื่องบิน': i === 3 ? 0 : 1 } });
