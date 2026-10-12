@@ -114,7 +114,7 @@ export async function enter(r, alive) {
       <label class="f">ชื่อบริษัท (อังกฤษ)<input name="name" value="${esc(s.company.name)}" maxlength="120"></label>
       <label class="f" style="grid-column:1 / -1">ลายเซ็นท้ายอีเมล<textarea name="signature" rows="3" maxlength="400">${esc(s.company.signature)}</textarea></label>
       <label class="f">ถือว่า "ช้ากว่าแผน" เมื่อเกิน (นาที)<input name="late_min" type="number" min="1" max="240" value="${s.late_min}" required></label>
-      <label class="f">เตือนเมื่อใช้พื้นที่รูปถึง (%)<input name="storage_warning_percent" type="number" min="1" max="99" value="${s.storage_warning_percent}" required><span class="fhelp">ค่าเริ่มต้น 80% ผู้ดูแลปรับได้ 1–99% เป็นจุดแจ้งเตือน ไม่เปลี่ยนโควตาพื้นที่หรือราคา</span></label>
+      <label class="f">เตือนเมื่อใช้พื้นที่เก็บไฟล์ถึง (%)<input name="storage_warning_percent" type="number" min="1" max="99" value="${s.storage_warning_percent}" required><span class="fhelp">ค่าเริ่มต้น 80% ผู้ดูแลปรับได้ 1–99% เป็นจุดแจ้งเตือน ไม่เปลี่ยนโควตาพื้นที่หรือราคา</span></label>
       <label class="f">เอกสารที่ต้องมีต่อคน (บรรทัดละ 1 รายการ)<textarea name="docs" rows="5">${esc(s.docs.join('\n'))}</textarea></label>
       <label class="f">เรื่องที่ได้รับแต่งตั้ง (บรรทัดละ 1 รายการ)<textarea name="services" rows="5">${esc(s.services.join('\n'))}</textarea></label>
       <div class="ferr" role="alert" style="grid-column:1 / -1"></div>
