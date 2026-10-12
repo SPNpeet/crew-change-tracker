@@ -74,7 +74,7 @@ test('writes without the app header or from another origin are refused', async (
 test('admin creates users; the 15 account limit is enforced', async () => {
   let r = await admin('POST', '/api/users', { username: 'office1', name: 'คุณปราณี', role: 'office', password: 'office12345' });
   assert.equal(r.status, 200);
-  r = await admin('POST', '/api/users', { username: 'somsak', name: 'สมศักดิ์', role: 'field', title: 'Boarding agent', id_card: '3-1001-00000-00-0', password: 'field12345' });
+  r = await admin('POST', '/api/users', { username: 'somsak', name: 'สมศักดิ์', role: 'field', title: 'Boarding agent', id_card: '3-1001-00000-00-0', emp_code: 'HR02', password: 'field12345' });
   S.somsak = r.data.id;
   r = await admin('POST', '/api/users', { username: 'wichai', name: 'วิชัย', role: 'field', password: 'field12345' });
   S.wichai = r.data.id;
@@ -121,6 +121,16 @@ test('field staff cannot use office or admin functions', async () => {
   assert.equal((await office('GET', '/api/users')).status, 403);
   const me = (await field('GET', '/api/me')).data;
   assert.equal(me.users[0].id_card, undefined, 'field staff must not see ID card numbers');
+  assert.ok(me.users.every(x => x.emp_code === undefined), 'field staff must not see employee codes');
+  let list = (await admin('GET', '/api/users')).data.users;
+  assert.equal(list.find(x => x.id === S.somsak).emp_code, 'HR02');
+  assert.equal(list.find(x => x.id === S.wichai).emp_code, '', 'employee code is optional');
+  assert.equal((await office('GET', '/api/me')).data.users.find(x => x.id === S.somsak).emp_code, 'HR02');
+  assert.equal((await admin('PATCH', `/api/users/${S.wichai}`, { emp_code: 'HR03' })).status, 200);
+  assert.equal((await admin('PATCH', `/api/users/${S.wichai}`, { emp_code: '' })).status, 200);
+  list = (await admin('GET', '/api/users')).data.users;
+  assert.equal(list.find(x => x.id === S.wichai).emp_code, '');
+  assert.equal((await office('PATCH', `/api/users/${S.wichai}`, { emp_code: 'X' })).status, 403);
 });
 
 test('office runs a job through the 9 steps', async () => {

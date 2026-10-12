@@ -132,7 +132,7 @@ async function changeOwnPassword(req, env, u) {
 async function boot(env, u) {
   const settings = await loadSettings(env);
   const [users, vehicles, hotels] = await Promise.all([
-    env.DB.prepare('SELECT id, name, role, see_all, title, phone, id_card, active FROM users ORDER BY active DESC, name').all(),
+    env.DB.prepare('SELECT id, name, role, see_all, title, phone, id_card, emp_code, active FROM users ORDER BY active DESC, name').all(),
     env.DB.prepare(isOffice(u) ? 'SELECT * FROM vehicles ORDER BY active DESC, name' : 'SELECT id, name, plate, driver, driver_phone, active FROM vehicles ORDER BY active DESC, name').all(),
     env.DB.prepare('SELECT * FROM hotels ORDER BY active DESC, name').all()
   ]);
@@ -155,8 +155,8 @@ async function insertUser(env, b) {
   const exists = await env.DB.prepare('SELECT id FROM users WHERE username = ?').bind(username).first();
   if (exists) throw new HttpError(409, 'ชื่อผู้ใช้นี้มีอยู่แล้ว');
   const h = await hashPassword(b.password);
-  const r = await env.DB.prepare('INSERT INTO users (username, name, role, see_all, title, phone, id_card, pw_hash, pw_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(username, name, b.role, b.see_all ? 1 : 0, str(b.title, 80), str(b.phone, 30), str(b.id_card, 30), h.hash, h.salt, now()).run();
+  const r = await env.DB.prepare('INSERT INTO users (username, name, role, see_all, title, phone, id_card, emp_code, pw_hash, pw_salt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(username, name, b.role, b.see_all ? 1 : 0, str(b.title, 80), str(b.phone, 30), str(b.id_card, 30), str(b.emp_code, 30), h.hash, h.salt, now()).run();
   return r.meta.last_row_id;
 }
 
@@ -183,6 +183,7 @@ async function patchUser(req, env, u, id) {
   if ('title' in b) set('title', str(b.title, 80));
   if ('phone' in b) set('phone', str(b.phone, 30));
   if ('id_card' in b) set('id_card', str(b.id_card, 30));
+  if ('emp_code' in b) set('emp_code', str(b.emp_code, 30));
   if ('see_all' in b) set('see_all', b.see_all ? 1 : 0);
   if ('role' in b) {
     if (!['admin', 'office', 'field'].includes(b.role)) throw new HttpError(400, 'สิทธิ์ไม่ถูกต้อง');
@@ -801,7 +802,7 @@ async function allData(env) {
     { name: 'Crew', rows: [['Crew ID', 'Job ID', 'Vessel', 'Name', 'Rank', 'Type', 'Nationality', 'Flight', 'Passport', 'Room', 'Boarding agent'], ...crew.results.map(c => [c.id, c.job_id, jobName.get(c.job_id) || '', c.name, c.rank, c.type, c.nationality, c.flight, c.passport, c.room, uName.get(c.agent_id) || ''])], widths: [8, 8, 24, 26, 10, 6, 14, 12, 14, 8, 18] },
     { name: 'Time log', rows: [['Job ID', 'Vessel', 'Name', 'No.', 'Checkpoint', 'Plan', 'Actual', 'Diff (min)', 'By'], ...cps.results.map(x => { const c = crewName.get(x.crew_id) || {}; return [c.job_id || '', jobName.get(c.job_id) || '', c.name || '', x.idx + 1, x.name, bkk(x.plan_at), bkk(x.actual_at), x.plan_at && x.actual_at ? Math.round((x.actual_at - x.plan_at) / 60000) : '', uName.get(x.actual_by) || '']; })], widths: [8, 24, 26, 5, 24, 17, 17, 10, 18] },
     { name: 'Activity', rows: [['Time', 'Job ID', 'Vessel', 'User', 'Detail'], ...activity.results.map(a => [bkk(a.at), a.job_id, jobName.get(a.job_id) || '', a.who || '', a.text])], widths: [17, 8, 24, 18, 70] },
-    { name: 'Users', rows: [['ID', 'Username', 'Name', 'Role', 'Title', 'Phone', 'Active'], ...users.results.map(x => [x.id, x.username, x.name, x.role, x.title, x.phone, x.active ? 'Yes' : 'No'])], widths: [5, 18, 24, 10, 22, 14, 8] },
+    { name: 'Users', rows: [['ID', 'Employee code', 'Username', 'Name', 'Role', 'Title', 'Phone', 'Active'], ...users.results.map(x => [x.id, x.emp_code, x.username, x.name, x.role, x.title, x.phone, x.active ? 'Yes' : 'No'])], widths: [5, 14, 18, 24, 10, 22, 14, 8] },
     { name: 'Vehicles', rows: [['ID', 'Name', 'Plate', 'Driver', 'Driver (EN)', 'Driver ID', 'Phone', 'Active'], ...vehicles.results.map(v => [v.id, v.name, v.plate, v.driver, v.driver_en, v.driver_id, v.driver_phone, v.active ? 'Yes' : 'No'])] },
     { name: 'Hotels', rows: [['ID', 'Name', 'Phone', 'Active'], ...hotels.results.map(h => [h.id, h.name, h.phone, h.active ? 'Yes' : 'No'])] }
   ];

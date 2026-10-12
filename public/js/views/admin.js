@@ -53,8 +53,8 @@ export async function enter(r, alive) {
     const active = USERS.filter(u => u.active).length;
     el().className = '';
     el().innerHTML = `<div class="card"><div class="card-h"><h3>ผู้ใช้งาน</h3><span class="sub">ใช้งานอยู่ ${active} / ${A.settings.max_users} บัญชี</span><div class="act"><button class="btn" data-act="a-adduser" type="button" ${active >= A.settings.max_users ? 'disabled' : ''}>${icon('plus')}เพิ่มผู้ใช้</button></div></div>
-      <div class="scroll"><table class="t nw"><thead><tr><th>ชื่อ</th><th>ชื่อผู้ใช้</th><th>สิทธิ์</th><th>เบอร์โทร</th><th>สถานะ</th><th></th></tr></thead><tbody>
-      ${USERS.map(u => `<tr class="${u.active ? '' : 'dim'}"><td><div class="nm">${esc(u.name)}</div><div class="sub">${esc(u.title || '')}</div></td><td>${esc(u.username)}</td><td>${esc(roleLabel(u))}</td><td>${esc(u.phone || '—')}</td><td>${u.active ? (u.locked ? '<span class="pill warn-c">ล็อกชั่วคราว</span>' : '<span class="pill ok">ใช้งาน</span>') : '<span class="pill gray">ปิดแล้ว</span>'}</td><td class="acts"><button class="btn line sm" data-act="a-edituser" data-id="${u.id}" type="button">${icon('edit')}แก้ไข</button></td></tr>`).join('')}
+      <div class="scroll"><table class="t nw"><thead><tr><th>ชื่อ</th><th>รหัสพนักงาน</th><th>ชื่อผู้ใช้</th><th>สิทธิ์</th><th>เบอร์โทร</th><th>สถานะ</th><th></th></tr></thead><tbody>
+      ${USERS.map(u => `<tr class="${u.active ? '' : 'dim'}"><td><div class="nm">${esc(u.name)}</div><div class="sub">${esc(u.title || '')}</div></td><td>${esc(u.emp_code || '—')}</td><td>${esc(u.username)}</td><td>${esc(roleLabel(u))}</td><td>${esc(u.phone || '—')}</td><td>${u.active ? (u.locked ? '<span class="pill warn-c">ล็อกชั่วคราว</span>' : '<span class="pill ok">ใช้งาน</span>') : '<span class="pill gray">ปิดแล้ว</span>'}</td><td class="acts"><button class="btn line sm" data-act="a-edituser" data-id="${u.id}" type="button">${icon('edit')}แก้ไข</button></td></tr>`).join('')}
       </tbody></table></div></div>
       <p class="muted s13">พนักงานภาคสนามเห็นเฉพาะลูกเรือที่ได้รับมอบหมาย ยกเว้นเปิด "เห็นลูกเรือทุกคน" สำหรับหัวหน้างาน · บัญชีที่ไม่ใช้แล้วให้ปิดแทนการลบ เพื่อให้ประวัติงานยังอยู่ครบ</p>`;
     return;
@@ -142,6 +142,7 @@ function userDialog(u) {
     <label class="f">ชื่อผู้ใช้ (ภาษาอังกฤษ)<input name="username" ${edit ? 'disabled' : 'required'} pattern="[A-Za-z0-9._\-]{3,40}" autocapitalize="none" value="${esc(u.username || '')}" placeholder="เช่น somsak"></label>
     <label class="f">สิทธิ์<select name="role" ${edit && u.id === A.me.id ? 'disabled' : ''}><option value="field" ${u.role === 'field' ? 'selected' : ''}>พนักงานภาคสนาม (มือถือ)</option><option value="office" ${u.role === 'office' ? 'selected' : ''}>สำนักงาน</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>ผู้ดูแลระบบ</option></select></label>
     <label class="f chk"><input type="checkbox" name="see_all" ${u.see_all ? 'checked' : ''}><span>เห็นลูกเรือทุกคน (หัวหน้างานภาคสนาม)</span></label>
+    <label class="f">รหัสพนักงาน (ไม่บังคับ)<input name="emp_code" maxlength="30" autocapitalize="characters" value="${esc(u.emp_code || '')}" placeholder="เช่น HR02"></label>
     <label class="f">ตำแหน่ง / หน้าที่<input name="title" maxlength="80" value="${esc(u.title || '')}" placeholder="เช่น Boarding agent · สนามบิน"></label>
     <label class="f">เบอร์โทร<input name="phone" maxlength="30" inputmode="tel" value="${esc(u.phone || '')}"></label>
     <label class="f">เลขบัตรประชาชน (ใช้ในอีเมล GATE PERMISSION)<input name="id_card" maxlength="30" value="${esc(u.id_card || '')}"></label>
@@ -149,7 +150,7 @@ function userDialog(u) {
     ${edit ? `<label class="f chk" style="grid-column:1 / -1"><input type="checkbox" name="active" ${u.active ? 'checked' : ''} ${u.id === A.me.id ? 'disabled' : ''}><span>เปิดใช้งานบัญชีนี้ (ปิดแล้วจะเข้าระบบไม่ได้ทันที)</span></label>` : ''}
     ${edit && u.locked ? `<label class="f chk" style="grid-column:1 / -1"><input type="checkbox" name="unlock" checked><span>ปลดล็อกบัญชี (ถูกล็อกเพราะใส่รหัสผิดหลายครั้ง)</span></label>` : ''}
     </div>${dlgFoot(edit ? 'บันทึก' : 'เพิ่มผู้ใช้')}</form>`, async fd => {
-    const b = { name: fd.get('name'), title: fd.get('title'), phone: fd.get('phone'), id_card: fd.get('id_card'), see_all: fd.get('see_all') === 'on' };
+    const b = { name: fd.get('name'), emp_code: fd.get('emp_code'), title: fd.get('title'), phone: fd.get('phone'), id_card: fd.get('id_card'), see_all: fd.get('see_all') === 'on' };
     if (fd.get('role')) b.role = fd.get('role');
     if (fd.get('password')) b.password = fd.get('password');
     if (edit) {
