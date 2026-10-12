@@ -1,0 +1,15 @@
+DROP INDEX IF EXISTS crew_driver;
+ALTER TABLE users DROP COLUMN avatar_size;
+ALTER TABLE users DROP COLUMN avatar_at;
+ALTER TABLE users DROP COLUMN avatar_key;
+ALTER TABLE photos DROP COLUMN received_at;
+ALTER TABLE photos DROP COLUMN gps;
+ALTER TABLE photos DROP COLUMN acc;
+ALTER TABLE photos DROP COLUMN cp_idx;
+ALTER TABLE checkpoints DROP COLUMN received_at;
+ALTER TABLE checkpoints DROP COLUMN actual_role;
+ALTER TABLE checkpoints DROP COLUMN photo_skip;
+ALTER TABLE checkpoints DROP COLUMN need_photo;
+ALTER TABLE crew DROP COLUMN driver_id;
+ALTER TABLE vehicles DROP COLUMN user_id;
+DELETE FROM d1_migrations WHERE name = '0005_field_evidence.sql';

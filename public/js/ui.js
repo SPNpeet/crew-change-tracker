@@ -1,4 +1,4 @@
-import { esc, hms, dateTh } from './core.js';
+import { esc, hms, dateTh, gpsText } from './core.js';
 
 const ICON = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
@@ -8,6 +8,8 @@ const ICON = {
   send: '<path d="M4 12l16-8-6 16-3-6-7-2z"/>',
   left: '<path d="M15 5l-7 7 7 7"/>',
   right: '<path d="M9 5l7 7-7 7"/>',
+  up: '<path d="M5 15l7-7 7 7"/>',
+  down: '<path d="M5 9l7 7 7-7"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.5"/>',
   list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
   office: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
@@ -56,8 +58,14 @@ export function copy(textValue, label) {
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(textValue).then(done, fallback); else fallback();
 }
 
+// The control that opened a dialog gets the focus back when the dialog closes (Escape, cancel or save).
+let lastTrigger = null;
+document.addEventListener('click', e => { if (!e.target.closest('#dlg')) lastTrigger = e.target.closest('button, a, label, select, input, [tabindex]'); }, true);
+
 export function openDialog(html, onSubmit) {
   const dlg = document.getElementById('dlg');
+  const opener = lastTrigger;
+  dlg.addEventListener('close', () => { if (opener && opener.isConnected && !dlg.open) opener.focus(); }, { once: true });
   dlg.innerHTML = html;
   const form = dlg.querySelector('form');
   const close = () => { if (dlg.open) dlg.close(); };
@@ -83,7 +91,7 @@ export function openDialog(html, onSubmit) {
   return dlg;
 }
 
-export const dlgHead = t => `<div class="dlg-h"><h3>${esc(t)}</h3><button type="button" class="iconbtn plain" data-close aria-label="ปิด">${icon('x')}</button></div>`;
+export const dlgHead = t => `<div class="dlg-h"><h3>${esc(t)}</h3><button type="button" class="iconbtn plain" data-close aria-label="ปิด" title="ปิด">${icon('x')}</button></div>`;
 export const dlgFoot = (label = 'บันทึก') => `<div class="ferr" role="alert"></div><div class="dlg-f"><button type="button" class="btn line" data-close>ยกเลิก</button><button type="submit" class="btn">${esc(label)}</button></div>`;
 
 export function saveFile(bytes, name, type) {
@@ -113,23 +121,40 @@ export function openLb(src, cap) {
 export function closeLb() { document.getElementById('lb').hidden = true; document.getElementById('lbimg').removeAttribute('src'); }
 
 let gpsCache = null;
-export function getGps() {
+// Always resolves: { status: 'ok', lat, lng, acc } or { status: 'denied' | 'unavailable' | 'timeout' }.
+export function gpsFix() {
   return new Promise(resolve => {
     if (gpsCache && Date.now() - gpsCache.t < 120000) return resolve(gpsCache);
-    if (!navigator.geolocation) return resolve(null);
+    if (!navigator.geolocation) return resolve({ status: 'unavailable' });
     navigator.geolocation.getCurrentPosition(
-      p => { gpsCache = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() }; resolve(gpsCache); },
-      () => resolve(null),
+      p => { gpsCache = { status: 'ok', lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() }; resolve(gpsCache); },
+      e => resolve({ status: e && e.code === 1 ? 'denied' : e && e.code === 3 ? 'timeout' : 'unavailable' }),
       { enableHighAccuracy: true, timeout: 6000, maximumAge: 120000 }
     );
   });
+}
+export const getGps = () => gpsFix().then(f => f.status === 'ok' ? f : null);
+
+export async function squarePhoto(file, size = 256) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('เปิดรูปนี้ไม่ได้ กรุณาเลือกรูป JPG หรือ PNG')); i.src = url; });
+    const side = Math.min(img.naturalWidth, img.naturalHeight);
+    if (!side) throw new Error('เปิดรูปนี้ไม่ได้ กรุณาเลือกรูป JPG หรือ PNG');
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = size;
+    cv.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+    return await new Promise(res => cv.toBlob(res, 'image/jpeg', 0.86));
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 export async function stampPhoto(file, info) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
-    const gps = await getGps();
+    const fix = await gpsFix(), gps = fix.status === 'ok' ? fix : null;
     const max = 1600;
     const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
     const w = Math.round(img.naturalWidth * k), h = Math.round(img.naturalHeight * k);
@@ -142,7 +167,7 @@ export async function stampPhoto(file, info) {
     const lines = [
       `${info.point} · ${info.name}${info.rank ? ' (' + info.rank + ')' : ''}`,
       `${dateTh(now)} ${hms(now)} · ${info.vessel}`,
-      gps ? `GPS ${gps.lat.toFixed(5)}, ${gps.lng.toFixed(5)} (±${Math.round(gps.acc)} ม.)` : 'ไม่ได้เปิดตำแหน่ง GPS · บันทึกเวลาและจุดแล้ว'
+      gpsText({ ...fix, gps: fix.status })
     ];
     const pad = Math.round(fs * 0.7), lh = Math.round(fs * 1.35);
     const band = pad * 2 + lh * lines.length + Math.round(fs * 0.9);
@@ -158,7 +183,7 @@ export async function stampPhoto(file, info) {
     g.fillStyle = 'rgba(255,255,255,.7)';
     g.fillText(info.company + ' · Crew Change Tracker', pad, h - pad - Math.round(fs * 0.75), w - pad * 2);
     const blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', 0.78));
-    return { blob, gps };
+    return { blob, gps, fix };
   } finally {
     URL.revokeObjectURL(url);
   }

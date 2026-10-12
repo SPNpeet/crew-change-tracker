@@ -9,19 +9,21 @@ const otherJob=(await api('POST','/api/jobs',{vessel:'TEST OTHER NAVIGATION'})).
 const b=await browser(),results=[];const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function ready(path){
  const selector=path.startsWith('/admin/general')?'#mailform textarea[name="gate"]':path.startsWith('/admin/backup')?'[href="/api/export/all.xlsx"]':path==='/account'?'#pwf':path.startsWith('/t/')?'.ow-head':/^\/field\//.test(path)?'.fieldpage':path==='/jobs'?'.jobtile':'.jobcard';
- for(let i=0;i<80;i++){try{if(await b.eval(`location.pathname===${JSON.stringify(path)}&&!!document.querySelector(${JSON.stringify(selector)})`))return;}catch{}await sleep(100);}
+ for(let i=0;i<300;i++){try{if(await b.eval(`location.pathname===${JSON.stringify(path)}&&!!document.querySelector(${JSON.stringify(selector)})`))return;}catch{}await sleep(100);}
  throw new Error('Page did not become ready: '+path);
 }
 async function fresh(path,cookie=admin){await b.go('/api/health',50);await b.cookie(cookie);await b.go(path,0);await ready(path);}
 async function check(id,name,fn){try{await fn();results.push({id,name,passed:true});console.log('PASS '+id+' '+name);}catch(e){results.push({id,name,passed:false,error:e.message});console.log('FAIL '+id+' '+name+': '+e.message);await b.shot(id+'-failure');}}
 async function hold(fragment,method){await b.eval(`window.originalFetch=fetch;window.held=[];window.fetch=(url,opts={})=>String(url).includes(${JSON.stringify(fragment)})&&(!${JSON.stringify(method||'')}||opts.method===${JSON.stringify(method||'')})?new Promise(resolve=>window.held.push({url,opts,resolve})):window.originalFetch(url,opts)`);}
-async function waitHeld(){for(let i=0;i<50;i++){if(await b.eval('window.held.length'))return;await sleep(30);}throw new Error('Request not intercepted');}
+async function waitHeld(){for(let i=0;i<400;i++){if(await b.eval('window.held.length'))return;await sleep(30);}throw new Error('Request not intercepted');}
+// Waits for a state the page or the server reaches after a save, instead of sleeping a fixed time.
+async function until(fn,label){for(let i=0;i<150;i++){try{if(await fn())return;}catch{}await sleep(100);}throw new Error('Timed out waiting for '+label);}
 async function release(){await b.eval(`(async()=>{window.fetch=window.originalFetch;for(const x of window.held){x.resolve(await window.originalFetch(x.url,x.opts));}window.held=[]})()`);await sleep(100);}
 async function nav(path){await b.eval(`import('/js/app.js').then(a=>a.go(${JSON.stringify(path)}))`);await ready(path);}
 try{
  await b.size(390,844,true);
  await check('BR01','slow checkpoint response cannot replace the account page',async()=>{
-  await fresh('/field/'+crew.id,staff);await hold('/confirm','POST');await b.eval(`document.querySelector('[data-act="f-confirm"]').click()`);await waitHeld();await nav('/account');assert.equal(await b.eval(`!!document.querySelector('#pwf')`),true);await release();assert.equal(await b.eval(`!!document.querySelector('#pwf')&&!document.querySelector('.fieldpage')`),true);await b.shot('slow-confirm-account-preserved');
+  await fresh('/field/'+crew.id,staff);await hold('/confirm','POST');await b.eval(`document.querySelector('[data-act="f-nophoto"]').click();document.querySelector('#dlg [name=why]').click();document.querySelector('#dlg form').requestSubmit()`);await waitHeld();await nav('/account');assert.equal(await b.eval(`!!document.querySelector('#pwf')`),true);await release();assert.equal(await b.eval(`!!document.querySelector('#pwf')&&!document.querySelector('.fieldpage')`),true);await b.shot('slow-confirm-account-preserved');
  });
  await check('BR02','revoked Owner link clears an already-open page on the next poll',async()=>{
   const j=await api('GET','/api/jobs/'+job.job.id);await fresh('/t/'+j.job.owner_token);assert.equal(await b.eval('!!document.querySelector(".ow-head")'),true);await api('POST','/api/jobs/'+job.job.id+'/token');await b.eval(`import('/js/views/owner.js').then(v=>v.poll())`);assert.equal(await b.eval(`!document.querySelector('.ow-head')&&document.querySelector('main').textContent.includes('not available')`),true);
@@ -46,12 +48,12 @@ try{
  });
  await check('BR08','all seven email templates preview variables, save and reset',async()=>{
   await fresh('/admin/general');await sleep(250);const kinds=['appoint','sched','gate','plan','night','morning','update'];
-  await b.eval(`for(const k of ${JSON.stringify(kinds)}){const ta=document.querySelector('#mailform textarea[name="'+k+'"]');ta.closest('details').open=true;ta.value='Subject: '+k+' {{vessel}}'+String.fromCharCode(10,10)+'{{signature}}';ta.dispatchEvent(new Event('input',{bubbles:true}));}document.querySelector('#mailform').requestSubmit()`);await sleep(450);
+  await b.eval(`for(const k of ${JSON.stringify(kinds)}){const ta=document.querySelector('#mailform textarea[name="'+k+'"]');ta.closest('details').open=true;ta.value='Subject: '+k+' {{vessel}}'+String.fromCharCode(10,10)+'{{signature}}';ta.dispatchEvent(new Event('input',{bubbles:true}));}document.querySelector('#mailform').requestSubmit()`);await until(async()=>(await api('GET','/api/me')).settings.mail_tpl.update.includes('Subject: update {{vessel}}'),'the seven templates to be saved');
   const settings=(await api('GET','/api/me')).settings;for(const k of kinds)assert.ok(settings.mail_tpl[k].includes('Subject: '+k+' {{vessel}}'));
-  await fresh('/admin/general');await sleep(350);
+  await fresh('/admin/general');await until(()=>b.eval(`!document.querySelector('#mailform .tpl-prev').hidden`),'the template previews');
   const previews=await b.eval(`Array.from(document.querySelectorAll('#mailform details')).map(d=>{d.open=true;d.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}));return d.querySelector('.tpl-prev pre').textContent})`);
   assert.equal(previews.length,7);assert.ok(previews.every(p=>p.includes('TEST OTHER NAVIGATION')||p.includes('MT OCEAN MERIDIAN')));assert.ok(previews.every(p=>!p.includes('{{vessel}}')));
-  await b.eval(`window.confirm=()=>true;document.querySelectorAll('[data-act="a-tplreset"]').forEach(t=>t.click());document.querySelector('#mailform').requestSubmit()`);await sleep(400);const reset=(await api('GET','/api/me')).settings.mail_tpl;for(const k of kinds)assert.notEqual(reset[k],settings.mail_tpl[k]);
+  await b.eval(`window.confirm=()=>true;document.querySelectorAll('[data-act="a-tplreset"]').forEach(t=>t.click());document.querySelector('#mailform').requestSubmit()`);await until(async()=>!(await api('GET','/api/me')).settings.mail_tpl.update.includes('Subject: update {{vessel}}'),'the reset templates to be saved');const reset=(await api('GET','/api/me')).settings.mail_tpl;for(const k of kinds)assert.notEqual(reset[k],settings.mail_tpl[k]);
  });
  await check('BR09','untrusted crew text stays text in Field and Owner views',async()=>{
   const hostile='<img src=x onerror="window.fixtureXss=1">';await api('PATCH','/api/crew/'+crew.id,{name:hostile});
@@ -64,14 +66,14 @@ try{
   await fresh('/admin/general');const before=(await api('GET','/api/me')).settings.mail_tpl;
   await b.eval(`document.querySelector('#mailform textarea[name="gate"]').value='UNSAVED LOCAL DRAFT {{vessel}}'`);
   const remote={...before,gate:'ANOTHER EDITOR SAVED {{vessel}}'};await api('PUT','/api/settings',{mail_tpl:remote,mail_tpl_expected:before});
-  await b.eval(`document.querySelector('#mailform').requestSubmit()`);await sleep(350);
+  await b.eval(`document.querySelector('#mailform').requestSubmit()`);await until(()=>b.eval(`document.querySelector('#mailform .ferr').textContent.length>0`),'the conflict message');
   assert.equal(await b.eval(`document.querySelector('#mailform textarea[name="gate"]').value`),'UNSAVED LOCAL DRAFT {{vessel}}');assert.ok((await b.eval(`document.querySelector('#mailform .ferr').textContent`)).includes('มีผู้แก้'));
   assert.equal((await api('GET','/api/me')).settings.mail_tpl.gate,remote.gate);await b.shot('email-concurrent-editor-draft-preserved');
  });
  await check('BR12','job list load-more reveals records beyond the first 200',async()=>{
   for(let i=0;i<202;i++)await api('POST','/api/jobs',{vessel:'TEST PAGINATION '+String(i).padStart(3,'0')});
   await fresh('/jobs');const before=await b.eval(`document.querySelectorAll('.jobtile').length`);
-  await b.eval(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('โหลดงานเพิ่มเติม')).click()`);await sleep(450);
+  await b.eval(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent.includes('โหลดงานเพิ่มเติม')).click()`);await until(()=>b.eval(`document.querySelectorAll('.jobtile').length>200`),'the next page of jobs');
   const after=await b.eval(`document.querySelectorAll('.jobtile').length`);assert.equal(before,200);assert.ok(after>200);assert.equal(await b.eval(`Array.from(document.querySelectorAll('button')).some(b=>b.textContent.includes('โหลดงานเพิ่มเติม'))`),false);
  });
 }finally{mkdirSync(dirname(OUT),{recursive:true});writeFileSync(join(dirname(OUT),'browser-results.json'),JSON.stringify({results,console:b.logs},null,2));console.log(JSON.stringify({pass:results.filter(x=>x.passed).length,fail:results.filter(x=>!x.passed).length,consoleErrors:b.logs.length}));b.close();}

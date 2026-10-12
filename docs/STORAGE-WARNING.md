@@ -1,8 +1,8 @@
 # File storage warning
 
-The job list shows usage of attached photos and crew document files to office and administrator accounts. Administrators also see usage in General settings and can set the warning threshold from 1% to 99%. The implementation default is 80%; it is an operational setting, not a threshold or extra charge stated in the quotation. Existing installations receive this default without a database migration.
+The job list shows usage of attached photos, crew document files and profile photos to office and administrator accounts. Administrators also see usage in General settings and can set the warning threshold from 1% to 99%. The implementation default is 80%; it is an operational setting, not a threshold or extra charge stated in the quotation. Existing installations receive this default without a database migration.
 
-Usage is the sum of photo and crew document file sizes currently recorded in the database, using the same 10 GB quota as upload validation. It does not represent total R2 bucket usage, backup storage, billing, or support for additional attachment formats. The warning does not change the quota or purchase capacity.
+Usage is the sum of job photo, crew document file and profile photo sizes currently recorded in the database, using the same 10 GB quota as upload validation. Profile photos are at most 1 MB each (the page sends a 256 px square), so 15 accounts add at most 15 MB. It does not represent total R2 bucket usage, backup storage, billing, or support for additional attachment formats. The warning does not change the quota or purchase capacity.
 
 Usage refreshes when the job list or General settings is opened, and after saving General settings. It is not an email, push notification, or background monitoring service. If usage cannot be read, the job list remains usable and displays a retry message. Only administrators may change the threshold; field and unauthenticated users cannot read the system usage endpoint.
 

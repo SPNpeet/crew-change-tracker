@@ -76,7 +76,7 @@ export async function logout(req, env) {
 }
 
 export function publicUser(u) {
-  return { id: u.id, username: u.username, name: u.name, role: u.role, see_all: !!u.see_all, title: u.title, phone: u.phone, id_card: u.id_card, emp_code: u.emp_code || '', active: !!u.active };
+  return { id: u.id, username: u.username, name: u.name, role: u.role, see_all: !!u.see_all, title: u.title, phone: u.phone, id_card: u.id_card, emp_code: u.emp_code || '', active: !!u.active, avatar_at: u.avatar_at || 0 };
 }
 
 export const isOffice = u => u && (u.role === 'admin' || u.role === 'office');

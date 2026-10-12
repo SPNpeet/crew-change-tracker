@@ -2,7 +2,7 @@ import { esc } from './core.js';
 
 const size = bytes => bytes < 1024 ** 2 ? `${Math.ceil(bytes / 1024)} KB` : bytes < 1024 ** 3 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 
-// The quota counts photos and crew document files still recorded in the app, not R2 backups.
+// The quota counts job photos, crew document files and profile photos still recorded in the app, not R2 backups.
 export function storageCard(s, admin = false) {
   if (!s) return '<div class="card storage-status" role="status"><div class="card-b">ตรวจพื้นที่เก็บไฟล์ไม่ได้ในขณะนี้ เปิดหน้านี้ใหม่เพื่อลองอีกครั้ง</div></div>';
   const needsAction = s.level === 'warning' || s.level === 'full';

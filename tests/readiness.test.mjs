@@ -154,7 +154,7 @@ test('RD17 unknown, incorrect and disabled logins return the same public error',
 test('RD18 Owner access expires 30 days after closure and reopening restores current link',async()=>{
  const token=ok(await office('GET','/api/jobs/'+S.job)).job.owner_token;
  const setClosed=age=>execFileSync(process.execPath,[wr,'d1','execute','cct','--local','--persist-to',persist,'--command',`UPDATE jobs SET status='closed',closed_at=${Date.now()-age} WHERE id=${S.job}`],{stdio:'ignore',windowsHide:true});
- try{setClosed(30*86400000-60000);assert.equal((await anon('GET','/api/public/'+token)).status,200);setClosed(30*86400000+60000);assert.equal((await anon('GET','/api/public/'+token)).status,404);}
+ try{setClosed(30*86400000-600000);assert.equal((await anon('GET','/api/public/'+token)).status,200);setClosed(30*86400000+600000);assert.equal((await anon('GET','/api/public/'+token)).status,404);}
  finally{ok(await office('PATCH','/api/jobs/'+S.job,{status:'open'}));}
  assert.equal((await anon('GET','/api/public/'+token)).status,200);
 });

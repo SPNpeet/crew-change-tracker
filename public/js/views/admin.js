@@ -1,6 +1,6 @@
 import { A, go, reloadRefs } from '../app.js';
 import { api } from '../api.js';
-import { esc, fmtFull, mail, DEFAULT_TPL, DEFAULT_OKTB } from '../core.js';
+import { esc, fmtFull, mail, userAv, DEFAULT_TPL, DEFAULT_OKTB } from '../core.js';
 import { icon, toast, openDialog, dlgHead, dlgFoot, uploadType } from '../ui.js';
 import { roleLabel } from './auth.js';
 import { storageCard } from '../storage.js';
@@ -54,7 +54,7 @@ function brandTiles() {
   return BRAND.map(([k, l, d]) => {
     const at = A.brand[k];
     return `<div class="brand"><div class="brand-pv">${at ? `<img src="/api/brand/${k}?v=${at}" alt="${l}">` : '<span>ยังไม่มีรูป</span>'}</div><div class="brand-i"><b>${l}</b><span class="sub">${d}</span>
-      <div class="row"><label class="btn line sm">${icon('image')}${at ? 'เปลี่ยนรูป' : 'อัปโหลดรูป'}<input type="file" accept="image/png,image/jpeg" data-chg="a-brand" data-kind="${k}" hidden></label>${at ? `<button class="btn line sm danger" data-act="a-branddel" data-kind="${k}" type="button">${icon('trash')}ลบรูป</button>` : ''}</div>
+      <div class="row"><label class="btn line sm">${icon('image')}${at ? 'เปลี่ยนรูป' : 'อัปโหลดรูป'}<input class="vh" type="file" accept="image/png,image/jpeg" data-chg="a-brand" data-kind="${k}" aria-label="${at ? 'เปลี่ยนรูป' : 'อัปโหลดรูป'}${l}"></label>${at ? `<button class="btn line sm danger" data-act="a-branddel" data-kind="${k}" type="button">${icon('trash')}ลบรูป</button>` : ''}</div>
       <div class="fstat" role="status"></div><div class="ferr" role="alert"></div></div></div>`;
   }).join('');
 }
@@ -70,8 +70,8 @@ export async function enter(r, alive) {
     const active = USERS.filter(u => u.active).length;
     el().className = '';
     el().innerHTML = `<div class="card"><div class="card-h"><h3>ผู้ใช้งาน</h3><span class="sub">ใช้งานอยู่ ${active} / ${A.settings.max_users} บัญชี</span><div class="act"><button class="btn" data-act="a-adduser" type="button" ${active >= A.settings.max_users ? 'disabled' : ''}>${icon('plus')}เพิ่มผู้ใช้</button></div></div>
-      <div class="scroll"><table class="t nw"><thead><tr><th>ชื่อ</th><th>รหัสพนักงาน</th><th>ชื่อผู้ใช้</th><th>สิทธิ์</th><th>เบอร์โทร</th><th>สถานะ</th><th></th></tr></thead><tbody>
-      ${USERS.map(u => `<tr class="${u.active ? '' : 'dim'}"><td><div class="nm">${esc(u.name)}</div><div class="sub">${esc(u.title || '')}</div></td><td>${esc(u.emp_code || '—')}</td><td>${esc(u.username)}</td><td>${esc(roleLabel(u))}</td><td>${esc(u.phone || '—')}</td><td>${u.active ? (u.locked ? '<span class="pill warn-c">ล็อกชั่วคราว</span>' : '<span class="pill ok">ใช้งาน</span>') : '<span class="pill gray">ปิดแล้ว</span>'}</td><td class="acts"><button class="btn line sm" data-act="a-edituser" data-id="${u.id}" type="button">${icon('edit')}แก้ไข</button></td></tr>`).join('')}
+      <div class="scroll"><table class="t nw cards"><thead><tr><th>ชื่อ</th><th>รหัสพนักงาน</th><th>ชื่อผู้ใช้</th><th>สิทธิ์</th><th>เบอร์โทร</th><th>สถานะ</th><th></th></tr></thead><tbody>
+      ${USERS.map(u => `<tr class="${u.active ? '' : 'dim'}"><td class="c-main"><div class="who2">${userAv(u)}<div><div class="nm">${esc(u.name)}</div><div class="sub">${esc(u.title || '')}</div></div></div></td><td data-l="รหัสพนักงาน">${esc(u.emp_code || '—')}</td><td data-l="ชื่อผู้ใช้">${esc(u.username)}</td><td data-l="สิทธิ์">${esc(roleLabel(u))}</td><td data-l="เบอร์โทร">${esc(u.phone || '—')}</td><td data-l="สถานะ">${u.active ? (u.locked ? '<span class="pill warn-c">ล็อกชั่วคราว</span>' : '<span class="pill ok">ใช้งาน</span>') : '<span class="pill gray">ปิดแล้ว</span>'}</td><td class="acts"><button class="btn line sm" data-act="a-edituser" data-id="${u.id}" type="button" aria-label="แก้ไข ${esc(u.name)}">${icon('edit')}แก้ไข</button></td></tr>`).join('')}
       </tbody></table></div></div>
       <p class="muted s13">พนักงานภาคสนามเห็นเฉพาะลูกเรือที่ได้รับมอบหมาย ยกเว้นสิทธิ์ "หัวหน้างานภาคสนาม" ที่เห็นลูกเรือทุกคน · บัญชีที่ไม่ใช้แล้วให้ปิดแทนการลบ เพื่อให้ประวัติงานยังอยู่ครบ</p>`;
     return;
@@ -80,25 +80,19 @@ export async function enter(r, alive) {
     await reloadRefs();
     if (!alive()) return;
     const list = tab === 'vehicles' ? A.vehicles : A.hotels;
+    const cell = (label, v) => `<td data-l="${label}">${esc(v || '—')}</td>`;
+    const account = x => { const u = x.user_id ? A.user(x.user_id) : null; return `<td data-l="บัญชีคนขับ">${!u ? '<span class="muted">ยังไม่มีบัญชี</span>' : u.active && u.role === 'field' ? esc(u.name) : `${esc(u.name)} <span class="pill warn-c">บัญชีถูกปิด</span>`}</td>`; };
     el().className = '';
     el().innerHTML = `<div class="card"><div class="card-h"><h3>${tab === 'vehicles' ? 'รถและคนขับ' : 'โรงแรม'}</h3><span class="sub">${list.filter(x => x.active).length} รายการที่ใช้งาน</span><div class="act"><button class="btn" data-act="a-res" data-kind="${tab}" type="button">${icon('plus')}เพิ่ม${tab === 'vehicles' ? 'รถ' : 'โรงแรม'}</button></div></div>
-      ${list.length ? `<div class="scroll"><table class="t nw"><thead><tr>${tab === 'vehicles' ? '<th>รถ</th><th>ทะเบียน</th><th>คนขับ</th><th>ชื่อคนขับ (อังกฤษ)</th><th>เลขบัตร</th><th>เบอร์โทร</th>' : '<th>โรงแรม</th><th>เบอร์โทร</th>'}<th>สถานะ</th><th></th></tr></thead><tbody>
-      ${list.map(x => `<tr class="${x.active ? '' : 'dim'}">${tab === 'vehicles' ? `<td class="nm">${esc(x.name)}</td><td>${esc(x.plate)}</td><td>${esc(x.driver)}</td><td>${esc(x.driver_en)}</td><td>${esc(x.driver_id)}</td><td>${esc(x.driver_phone)}</td>` : `<td class="nm">${esc(x.name)}</td><td>${esc(x.phone)}</td>`}<td>${x.active ? '<span class="pill ok">ใช้งาน</span>' : '<span class="pill gray">ไม่ใช้แล้ว</span>'}</td><td class="acts"><button class="btn line sm" data-act="a-res" data-kind="${tab}" data-id="${x.id}" type="button">${icon('edit')}แก้ไข</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="card-b muted">ยังไม่มีรายการ</div>'}</div>
-      <p class="muted s13">${tab === 'vehicles' ? 'ชื่อคนขับภาษาอังกฤษ เลขบัตร และทะเบียน ใช้ในอีเมล GATE PERMISSION' : 'โรงแรมที่เพิ่มไว้จะเลือกได้ในขั้นตอนที่ 7'}</p>`;
+      ${list.length ? `<div class="scroll"><table class="t nw ${tab === 'vehicles' ? 'tight ' : ''}cards"><thead><tr>${tab === 'vehicles' ? '<th>รถ</th><th>ทะเบียน</th><th>คนขับ</th><th>ชื่อคนขับ (อังกฤษ)</th><th>เลขบัตร</th><th>เบอร์โทร</th><th>บัญชีคนขับ</th>' : '<th>โรงแรม</th><th>เบอร์โทร</th>'}<th>สถานะ</th><th></th></tr></thead><tbody>
+      ${list.map(x => `<tr class="${x.active ? '' : 'dim'}"><td class="c-main nm">${esc(x.name)}</td>${tab === 'vehicles' ? cell('ทะเบียน', x.plate) + cell('คนขับ', x.driver) + cell('ชื่อคนขับ (อังกฤษ)', x.driver_en) + cell('เลขบัตร', x.driver_id) + cell('เบอร์โทร', x.driver_phone) + account(x) : cell('เบอร์โทร', x.phone)}<td data-l="สถานะ">${x.active ? '<span class="pill ok">ใช้งาน</span>' : '<span class="pill gray">ไม่ใช้แล้ว</span>'}</td><td class="acts"><button class="btn line sm" data-act="a-res" data-kind="${tab}" data-id="${x.id}" type="button" aria-label="แก้ไข ${esc(x.name)}">${icon('edit')}แก้ไข</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="card-b muted">ยังไม่มีรายการ</div>'}</div>
+      <p class="muted s13">${tab === 'vehicles' ? 'ชื่อคนขับภาษาอังกฤษ เลขบัตร และทะเบียน ใช้ในอีเมล GATE PERMISSION · รถที่มีบัญชีคนขับ ลูกเรือที่จัดให้รถคันนั้นจะขึ้นในมือถือของคนขับด้วย' : 'โรงแรมที่เพิ่มไว้จะเลือกได้ในขั้นตอนที่ 7'}</p>`;
     return;
   }
   if (tab === 'points') {
-    const s = A.settings;
-    const block = (key, title) => {
-      const list = s[key], chain = s[key + '_chain'];
-      return `<div class="card"><div class="card-h"><h3>${title}</h3><span class="sub">${list.length} จุด</span></div><div class="card-b">
-        <div class="cp-edit" data-key="${key}">${list.map((x, i) => cpRow(x, i, chain)).join('')}</div>
-        <div class="row" style="margin-top:10px"><button class="btn line sm" data-act="a-cpadd" data-key="${key}" type="button">${icon('plus')}เพิ่มจุด</button></div></div></div>`;
-    };
-    el().className = '';
-    el().innerHTML = `<div class="hint">${icon('info')}<span>จุดสถานะใช้กับลูกเรือที่เพิ่ม<b>หลังจากบันทึก</b> ลูกเรือเดิมใช้จุดชุดเดิมต่อ · "นาทีจากจุดก่อน" ใช้เติมเวลาแผนอัตโนมัติ · <b>จุดสิ้นสุดการเลื่อนเวลา</b>: ถ้าลูกเรือช้า ระบบเลื่อนเวลาคาดการณ์ของจุดถัดไปจนถึงจุดนี้</span></div>
-      <form id="cpform" class="stack">${block('cp_on', 'On signer (ขึ้นเรือ)')}${block('cp_off', 'Off signer (ลงเรือ)')}
-      <div class="ferr" role="alert"></div><div><button class="btn" type="submit">${icon('check')}บันทึกจุดสถานะ</button></div></form>`;
+    await reloadRefs();
+    if (!alive()) return;
+    renderPoints();
     return;
   }
   if (tab === 'general') {
@@ -157,7 +151,7 @@ export async function enter(r, alive) {
     if (!alive()) return;
     const monthly = d.backups.filter(b => !b.name.startsWith('daily/'));
     const nightly = d.backups.filter(b => b.name.startsWith('daily/'));
-    const table = (list, label) => list.length ? `<div class="scroll"><table class="t nw"><thead><tr><th>${label}</th><th>ขนาด</th><th>สร้างเมื่อ</th><th></th></tr></thead><tbody>${list.map(b => `<tr><td class="nm">${esc(b.name.replace('daily/', '').replace(/\.(xlsx|json\.gz)$/, ''))}</td><td>${Math.max(1, Math.round(b.size / 1024))} KB</td><td>${fmtFull(Date.parse(b.uploaded))}</td><td class="acts"><a class="btn line sm" href="/api/backups/${b.name.split('/').map(encodeURIComponent).join('/')}" download>${icon('download')}ดาวน์โหลด</a></td></tr>`).join('')}</tbody></table></div>` : '';
+    const table = (list, label) => list.length ? `<div class="scroll"><table class="t nw cards"><thead><tr><th>${label}</th><th>ขนาด</th><th>สร้างเมื่อ</th><th></th></tr></thead><tbody>${list.map(b => `<tr><td class="c-main nm" data-l="${label}">${esc(b.name.replace('daily/', '').replace(/\.(xlsx|json\.gz)$/, ''))}</td><td data-l="ขนาด">${Math.max(1, Math.round(b.size / 1024))} KB</td><td data-l="สร้างเมื่อ">${fmtFull(Date.parse(b.uploaded))}</td><td class="acts"><a class="btn line sm" href="/api/backups/${b.name.split('/').map(encodeURIComponent).join('/')}" download>${icon('download')}ดาวน์โหลด</a></td></tr>`).join('')}</tbody></table></div>` : '';
     el().className = 'stack';
     el().innerHTML = `<div class="card"><div class="card-h"><h3>ดาวน์โหลดข้อมูลทั้งหมดตอนนี้</h3></div><div class="card-b"><p class="muted s14" style="margin-top:0">ไฟล์ Excel รวมงาน ลูกเรือ Time log ความเคลื่อนไหว ผู้ใช้ รถ และโรงแรม</p><a class="btn" href="/api/export/all.xlsx" download>${icon('download')}ดาวน์โหลด Excel ทั้งระบบ</a></div></div>
       <div class="card"><div class="card-h"><h3>สำรองฐานข้อมูลทุกคืน</h3><span class="sub">02:00 ทุกคืน · เก็บย้อนหลัง 35 วัน</span></div>
@@ -169,8 +163,84 @@ export async function enter(r, alive) {
   }
 }
 
-function cpRow(x, i, chain) {
-  return `<div class="cp-row"><span class="cp-n">${i + 1}</span><input name="th" value="${esc(x.th)}" maxlength="60" placeholder="ชื่อจุด (ไทย)" aria-label="ชื่อจุดภาษาไทย" required><input name="en" value="${esc(x.en)}" maxlength="60" placeholder="ชื่อจุด (อังกฤษ สำหรับ Owner)" aria-label="ชื่อจุดภาษาอังกฤษ"><label class="cp-gap"><input name="gap" type="number" min="0" max="10080" value="${x.gap}" aria-label="นาทีจากจุดก่อน"><span>นาทีจากจุดก่อน</span></label><label class="cp-chain"><input type="radio" name="chain-${i}" value="${i}" ${i === chain ? 'checked' : ''} data-chain aria-label="จุดสิ้นสุดการเลื่อนเวลา"><span>จุดสิ้นสุดการเลื่อนเวลา</span></label><button class="iconbtn" type="button" data-act="a-cpdel" aria-label="ลบจุด">${icon('trash')}</button></div>`;
+const CP_LISTS = [['cp_on', 'On signer (ขึ้นเรือ)'], ['cp_off', 'Off signer (ลงเรือ)']];
+let CP = null;
+const cpForm = () => document.getElementById('cpform');
+const newPointId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 10);
+
+// Each row carries the point's own id, so name, minutes and photo flag stay together when rows move.
+function cpRow(x) {
+  return `<div class="cp-row" data-id="${esc(x.id)}"><span class="cp-n"></span>
+    <label class="cp-f"><span class="cp-l">ชื่อจุด (ไทย)</span><input name="th" value="${esc(x.th)}" maxlength="60" required></label>
+    <label class="cp-f"><span class="cp-l">ชื่อจุด (อังกฤษ ให้ Owner เห็น)</span><input name="en" value="${esc(x.en)}" maxlength="60"></label>
+    <label class="cp-f cp-gap"><span class="cp-l">นาทีจากจุดก่อน</span><input name="gap" type="number" inputmode="numeric" min="0" max="10080" value="${x.gap}"></label>
+    <label class="cp-photo"><input type="checkbox" name="photo" ${x.photo ? 'checked' : ''}><span>ต้องถ่ายรูป</span></label>
+    <span class="cp-acts"><button class="iconbtn plain" type="button" data-act="a-cpup" data-say="เลื่อนขึ้น">${icon('up')}</button><button class="iconbtn plain" type="button" data-act="a-cpdown" data-say="เลื่อนลง">${icon('down')}</button><button class="iconbtn" type="button" data-act="a-cpdel" data-say="ลบจุด">${icon('trash')}</button></span></div>`;
+}
+
+function renderPoints() {
+  const s = A.settings;
+  const block = ([key, title]) => {
+    const list = s[key], chain = list[Math.min(s[key + '_chain'], list.length - 1)].id;
+    return `<div class="card cp-card"><div class="card-h"><h3>${title}</h3><span class="sub cp-count" role="status"></span></div><div class="card-b">
+      <label class="f cp-chainf"><span>ถ้าลูกเรือมาช้า ให้เลื่อนเวลาคาดการณ์ถึงจุด</span><select name="${key}_chain" data-chainsel></select><span class="fhelp">จุดหลังจากนี้ยึดตามตารางเรือ ไม่เลื่อนตามเที่ยวบิน เช่น เลือก ถึงโรงแรม</span></label>
+      <div class="cp-head" aria-hidden="true"><span></span><span>ชื่อจุด (ไทย)</span><span>ชื่อจุด (อังกฤษ ให้ Owner เห็น)</span><span>นาทีจากจุดก่อน</span><span></span><span></span></div>
+      <div class="cp-edit" data-key="${key}" data-chain="${esc(chain)}">${list.map(cpRow).join('')}</div>
+      <div class="row" style="margin-top:10px"><button class="btn line sm" data-act="a-cpadd" data-key="${key}" type="button">${icon('plus')}เพิ่มจุด</button><span class="fhelp">มีได้ 2 ถึง 20 จุด</span></div></div></div>`;
+  };
+  const adm = document.getElementById('adm');
+  adm.className = '';
+  adm.innerHTML = `<div class="hint">${icon('info')}<div class="hint-l">
+      <div><b>จุดสถานะ</b> คือจุดที่พนักงานภาคสนามกดยืนยันในมือถือเมื่อลูกเรือไปถึง เช่น เครื่องลง ขึ้นรถ ถึงโรงแรม</div>
+      <div>แก้แล้วมีผลกับลูกเรือที่เพิ่ม<b>หลังกดบันทึก</b> ลูกเรือที่เพิ่มไว้แล้วใช้จุดชุดเดิมของตัวเองต่อไป</div>
+      <div><b>นาทีจากจุดก่อน</b> ใช้เติมเวลาตามแผนให้อัตโนมัติในขั้นตอนที่ 5 เมื่อกด "เติมเวลาที่เหลือ"</div>
+      <div><b>ต้องถ่ายรูป</b> มือถือจะให้ถ่ายรูปพร้อมเวลาและพิกัดจากมือถือก่อนยืนยันจุดนั้น ถ้าไม่ถ่ายต้องใส่เหตุผล และสำนักงานจะเห็นว่าจุดนั้นรูปค้าง</div>
+    </div></div>
+    <form id="cpform" class="stack">${CP_LISTS.map(block).join('')}
+      <div class="savebar"><div class="ferr" role="alert"></div><div class="row"><button class="btn" type="submit">${icon('check')}บันทึกจุดสถานะ</button><button class="btn line" type="button" data-act="a-cpreset">ยกเลิกการแก้ไข</button><span class="unsaved" id="cpdirty" role="status" hidden>ยังไม่ได้บันทึก</span></div></div></form>`;
+  CP = { expected: structuredClone({ cp_on: s.cp_on, cp_off: s.cp_off, cp_on_chain: s.cp_on_chain, cp_off_chain: s.cp_off_chain }) };
+  cpForm().querySelectorAll('.cp-edit').forEach(cpSync);
+  CP.saved = JSON.stringify(cpRead());
+  cpDirty();
+  A.leave = () => !!cpForm() && JSON.stringify(cpRead()) !== CP.saved;
+}
+
+function cpRead() {
+  const body = {};
+  for (const box of cpForm().querySelectorAll('.cp-edit')) {
+    body[box.dataset.key] = [...box.querySelectorAll('.cp-row')].map(r => ({ id: r.dataset.id, th: r.querySelector('[name=th]').value.trim(), en: r.querySelector('[name=en]').value.trim(), gap: +r.querySelector('[name=gap]').value || 0, photo: r.querySelector('[name=photo]').checked }));
+    body[box.dataset.key + '_chain_id'] = box.dataset.chain;
+  }
+  return body;
+}
+
+function cpDirty() {
+  const dirty = JSON.stringify(cpRead()) !== CP.saved;
+  document.getElementById('cpdirty').hidden = !dirty;
+  cpForm().querySelector('[data-act="a-cpreset"]').disabled = !dirty;
+}
+
+// Numbers, the live count, the move buttons and the choices of the forecast select all follow the rows on screen.
+function cpSync(box) {
+  const rows = [...box.querySelectorAll('.cp-row')], card = box.closest('.cp-card');
+  rows.forEach((r, i) => {
+    const name = r.querySelector('[name=th]').value.trim() || `จุดที่ ${i + 1}`;
+    r.querySelector('.cp-n').textContent = i + 1;
+    r.querySelectorAll('.cp-acts button').forEach(b => { b.title = b.dataset.say; b.setAttribute('aria-label', `${b.dataset.say} ${name}`); });
+    r.querySelector('[data-act="a-cpup"]').disabled = i === 0;
+    r.querySelector('[data-act="a-cpdown"]').disabled = i === rows.length - 1;
+  });
+  card.querySelector('.cp-count').textContent = `${rows.length} จุด`;
+  const sel = card.querySelector('[data-chainsel]'), kept = rows.some(r => r.dataset.id === box.dataset.chain);
+  sel.innerHTML = (kept ? '' : '<option value="">จุดเดิมถูกลบแล้ว กรุณาเลือกจุดใหม่</option>') + rows.map((r, i) => `<option value="${esc(r.dataset.id)}">${i + 1}. ${esc(r.querySelector('[name=th]').value.trim() || 'ยังไม่ได้ตั้งชื่อ')}</option>`).join('');
+  sel.value = kept ? box.dataset.chain : '';
+  if (!kept) box.dataset.chain = '';
+}
+
+function cpChanged(box, focus) {
+  cpSync(box);
+  cpDirty();
+  if (focus && !focus.disabled) focus.focus();
 }
 
 function userDialog(u) {
@@ -211,8 +281,11 @@ function resDialog(kind, x) {
   const edit = !!x;
   x = x || { active: 1 };
   const f = (n, l, attrs = '') => `<label class="f">${l}<input name="${n}" value="${esc(x[n] || '')}" ${attrs}></label>`;
-  openDialog(`<form class="dlg-form">${dlgHead((edit ? 'แก้ไข' : 'เพิ่ม') + (veh ? 'รถ' : 'โรงแรม'))}<div class="dlg-b form" style="grid-template-columns:1fr 1fr">
-    ${veh ? f('name', 'ชื่อรถ', 'required maxlength="60" placeholder="เช่น รถตู้ 1"') + f('plate', 'ทะเบียน', 'maxlength="30"') + f('driver', 'คนขับ', 'maxlength="80" placeholder="เช่น คุณประเสริฐ"') + f('driver_en', 'ชื่อคนขับ (อังกฤษ)', 'maxlength="80"') + f('driver_id', 'เลขบัตรคนขับ', 'maxlength="30"') + f('driver_phone', 'เบอร์โทรคนขับ', 'maxlength="30" inputmode="tel"')
+  const drivers = A.users.filter(u => u.role === 'field' && u.active);
+  const gone = x.user_id && !drivers.some(u => u.id === x.user_id) ? A.user(x.user_id) : null;
+  const account = `<label class="f" style="grid-column:1 / -1"><span>บัญชีผู้ใช้ของคนขับ</span><select name="user_id"><option value="">ยังไม่มีบัญชี</option>${drivers.map(u => `<option value="${u.id}" ${x.user_id === u.id ? 'selected' : ''}>${esc(u.name)}${u.see_all ? ' (หัวหน้างานภาคสนาม)' : ''}${u.emp_code ? ' · ' + esc(u.emp_code) : ''}</option>`).join('')}</select><span class="fhelp">เมื่อเชื่อมบัญชีแล้ว ลูกเรือที่จัดให้รถคันนี้จะขึ้นในมือถือของคนขับคนนั้น · เลือกได้เฉพาะบัญชีพนักงานภาคสนามที่ยังใช้งาน · ลูกเรือที่จัดรถคันนี้ไว้ก่อนเชื่อมบัญชี ให้กดเปลี่ยนคนขับที่ขั้นตอนที่ 7 ของงานนั้น</span></label>${gone ? `<div class="okhint" style="grid-column:1 / -1">บัญชีที่เคยเชื่อมไว้ (${esc(gone.name)}) ถูกปิดแล้ว เลือกบัญชีใหม่ หรือกดบันทึกเพื่อยกเลิกการเชื่อม</div>` : ''}`;
+  openDialog(`<form class="dlg-form" id="resf">${dlgHead((edit ? 'แก้ไข' : 'เพิ่ม') + (veh ? 'รถ' : 'โรงแรม'))}<div class="dlg-b form" style="grid-template-columns:1fr 1fr">
+    ${veh ? f('name', 'ชื่อรถ', 'required maxlength="60" placeholder="เช่น รถตู้ 1"') + f('plate', 'ทะเบียน', 'maxlength="30"') + account + f('driver', 'คนขับ', 'maxlength="80" placeholder="เช่น คุณประเสริฐ"') + f('driver_en', 'ชื่อคนขับ (อังกฤษ)', 'maxlength="80"') + f('driver_id', 'เลขบัตรคนขับ', 'maxlength="30"') + f('driver_phone', 'เบอร์โทรคนขับ', 'maxlength="30" inputmode="tel"')
       : f('name', 'ชื่อโรงแรม', 'required maxlength="120"') + f('phone', 'เบอร์โทร', 'maxlength="30" inputmode="tel"')}
     ${edit ? `<label class="f chk" style="grid-column:1 / -1"><input type="checkbox" name="active" ${x.active ? 'checked' : ''}><span>ยังใช้งานอยู่ (ปิดแล้วจะไม่แสดงให้เลือกในงานใหม่)</span></label>` : ''}
     </div>${dlgFoot()}</form>`, async fd => {
@@ -222,6 +295,13 @@ function resDialog(kind, x) {
     await reloadRefs();
     toast('บันทึกแล้ว');
     go(`/admin/${kind}`, true);
+  });
+  const form = document.getElementById('resf');
+  if (veh) form.elements.user_id.addEventListener('change', e => {
+    const u = A.user(+e.target.value);
+    if (!u) return;
+    // Only empty boxes are filled from the account, and they stay editable.
+    for (const [name, value] of [['driver', u.name], ['driver_phone', u.phone], ['driver_id', u.id_card]]) if (value && !form.elements[name].value.trim()) form.elements[name].value = value;
   });
 }
 
@@ -246,29 +326,38 @@ function showPreview(det) {
   box.querySelector('pre').textContent = mail(ta.name, PREVIEW.job, PREVIEW.crew, { ...A, settings: { ...A.settings, mail_tpl: { [ta.name]: ta.value } } });
 }
 
-function renumber(box) {
-  [...box.querySelectorAll('.cp-row')].forEach((r, i) => {
-    r.querySelector('.cp-n').textContent = i + 1;
-    const radio = r.querySelector('[data-chain]');
-    radio.value = i;
-  });
-}
-
 export const actions = {
   'a-adduser'() { userDialog(null); },
   'a-edituser'(t) { userDialog(USERS.find(u => u.id === +t.dataset.id)); },
   'a-res'(t) { const list = t.dataset.kind === 'vehicles' ? A.vehicles : A.hotels; resDialog(t.dataset.kind, t.dataset.id ? list.find(x => x.id === +t.dataset.id) : null); },
   'a-cpadd'(t) {
     const box = document.querySelector(`.cp-edit[data-key="${t.dataset.key}"]`);
-    box.insertAdjacentHTML('beforeend', cpRow({ th: '', en: '', gap: 30 }, box.children.length, -1));
-    renumber(box);
-    box.lastElementChild.querySelector('input').focus();
+    if (box.children.length >= 20) return toast('มีได้ไม่เกิน 20 จุด');
+    box.insertAdjacentHTML('beforeend', cpRow({ id: newPointId(), th: '', en: '', gap: 30, photo: false }));
+    cpChanged(box, box.lastElementChild.querySelector('input'));
   },
   'a-cpdel'(t) {
-    const box = t.closest('.cp-edit');
+    const box = t.closest('.cp-edit'), row = t.closest('.cp-row');
     if (box.children.length <= 2) return toast('ต้องมีอย่างน้อย 2 จุด');
-    t.closest('.cp-row').remove();
-    renumber(box);
+    const next = (row.nextElementSibling || row.previousElementSibling).querySelector('[data-act="a-cpdel"]');
+    row.remove();
+    cpChanged(box, next);
+  },
+  'a-cpup'(t) {
+    const row = t.closest('.cp-row');
+    if (!row.previousElementSibling) return;
+    row.previousElementSibling.before(row);
+    cpChanged(row.parentElement, row.previousElementSibling ? t : row.querySelector('[data-act="a-cpdown"]'));
+  },
+  'a-cpdown'(t) {
+    const row = t.closest('.cp-row');
+    if (!row.nextElementSibling) return;
+    row.nextElementSibling.after(row);
+    cpChanged(row.parentElement, row.nextElementSibling ? t : row.querySelector('[data-act="a-cpup"]'));
+  },
+  'a-cpreset'() {
+    renderPoints();
+    toast('ยกเลิกการแก้ไขแล้ว แสดงค่าที่บันทึกไว้ล่าสุด');
   },
   'a-tplreset'(t) {
     const det = t.closest('details');
@@ -321,12 +410,18 @@ export const changes = {
 
 document.addEventListener('input', e => {
   if (e.target.matches('#mailform textarea')) showPreview(e.target.closest('details'));
+  if (e.target.matches('#cpform .cp-row input')) {
+    if (e.target.name === 'th') cpSync(e.target.closest('.cp-edit'));
+    cpDirty();
+  }
 });
 
 document.addEventListener('change', e => {
-  if (!e.target.matches('.cp-edit [data-chain]')) return;
-  const box = e.target.closest('.cp-edit');
-  box.querySelectorAll('[data-chain]').forEach(r => { if (r !== e.target) r.checked = false; });
+  if (e.target.matches('#cpform [data-chainsel]')) {
+    const box = e.target.closest('.cp-card').querySelector('.cp-edit');
+    box.dataset.chain = e.target.value;
+    cpChanged(box);
+  } else if (e.target.matches('#cpform .cp-row input')) cpDirty();
 });
 
 document.addEventListener('submit', async e => {
@@ -340,14 +435,13 @@ document.addEventListener('submit', async e => {
   try {
     let body;
     if (f.id === 'cpform') {
-      body = {};
-      for (const box of f.querySelectorAll('.cp-edit')) {
-        const key = box.dataset.key;
-        const rows = [...box.querySelectorAll('.cp-row')];
-        body[key] = rows.map(r => ({ th: r.querySelector('[name=th]').value, en: r.querySelector('[name=en]').value, gap: +r.querySelector('[name=gap]').value || 0 }));
-        const ch = rows.findIndex(r => r.querySelector('[data-chain]').checked);
-        body[key + '_chain'] = ch < 0 ? 0 : ch;
+      body = cpRead();
+      const lost = CP_LISTS.find(([key]) => !body[key + '_chain_id']);
+      if (lost) {
+        f.querySelector(`[name="${lost[0]}_chain"]`).focus();
+        throw new Error(`${lost[1]}: จุดที่เลือกไว้ในช่อง "ถ้าลูกเรือมาช้า" ถูกลบแล้ว กรุณาเลือกจุดใหม่ก่อนบันทึก`);
       }
+      body.cp_expected = CP.expected;
     } else if (f.id === 'mailform') {
       const blank = MAIL_KINDS.find(([k]) => !f.elements[k].value.trim());
       if (blank) {
@@ -371,7 +465,8 @@ document.addEventListener('submit', async e => {
       const storage = await api('GET', '/api/storage').catch(() => null);
       if (f.isConnected) document.querySelector('.storage-status')?.replaceWith(document.createRange().createContextualFragment(storageCard(storage)));
     }
-        toast(f.id === 'mailform' ? 'บันทึกข้อความอีเมลแล้ว' : f.id === 'oktbform' ? 'บันทึกเอกสาร OK TO BOARD แล้ว' : 'บันทึกการตั้งค่าแล้ว');
+    if (f.id === 'cpform' && f.isConnected) renderPoints();
+    toast(f.id === 'mailform' ? 'บันทึกข้อความอีเมลแล้ว' : f.id === 'oktbform' ? 'บันทึกเอกสาร OK TO BOARD แล้ว' : f.id === 'cpform' ? 'บันทึกจุดสถานะแล้ว มีผลกับลูกเรือที่เพิ่มหลังจากนี้' : 'บันทึกการตั้งค่าแล้ว');
   } catch (x) { err.textContent = x.message; }
   finally { btn.disabled = false; }
 });

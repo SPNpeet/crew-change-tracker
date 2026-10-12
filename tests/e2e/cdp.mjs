@@ -25,16 +25,20 @@ export async function login(username, password) {
 export async function browser() {
   if (!existsSync(CHROME)) throw new Error('Chrome not found at ' + CHROME + ' (set CHROME to the chrome executable)');
   const dir = mkdtempSync(join(tmpdir(), 'cdp-'));
-  const proc = spawn(CHROME, ['--headless=new', '--disable-gpu', '--hide-scrollbars', `--remote-debugging-port=${PORT}`, `--user-data-dir=${dir}`, 'about:blank'], { stdio: 'ignore' });
+  // A fresh Chrome profile downloads its own on-device models (CRX packages from optimizationguide-pa.googleapis.com/downloads)
+  // a few seconds after start. With a DevTools download folder set they land there as "downloads.htm.crdownload".
+  // Turning the Optimization Guide off keeps Chrome from starting those downloads during a test.
+  const proc = spawn(CHROME, ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--disable-features=OptimizationHints,OptimizationHintsFetching,OptimizationGuideModelDownloading,OptimizationTargetPrediction', '--disable-component-update', '--no-first-run', `--remote-debugging-port=${PORT}`, `--user-data-dir=${dir}`, 'about:blank'], { stdio: 'ignore' });
   let ver;
   for (let i = 0; i < 50; i++) { try { ver = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json(); if (ver.length) break; } catch (e) {} await new Promise(r => setTimeout(r, 200)); }
   const page = ver.find(t => t.type === 'page');
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise(r => ws.addEventListener('open', r, { once: true }));
-  let id = 0; const pend = new Map(); const logs = [];
+  let id = 0; const pend = new Map(); const logs = []; const subs = new Map();
   ws.addEventListener('message', m => {
     const d = JSON.parse(m.data);
     if (d.id && pend.has(d.id)) { const p = pend.get(d.id); pend.delete(d.id); d.error ? p.rej(new Error(d.error.message)) : p.res(d.result); }
+    if (d.method && subs.has(d.method)) for (const fn of subs.get(d.method)) fn(d.params);
     if (d.method === 'Runtime.exceptionThrown') logs.push('EXC ' + d.params.exceptionDetails.exception?.description?.split('\n')[0]);
     if (d.method === 'Runtime.consoleAPICalled' && d.params.type === 'error') logs.push('ERR ' + d.params.args.map(a => a.value || a.description).join(' '));
   });
@@ -54,6 +58,7 @@ export async function browser() {
       writeFileSync(join(OUT, name + '.png'), Buffer.from(r.data, 'base64'));
     },
     send,
+    on(method, fn) { if (!subs.has(method)) subs.set(method, []); subs.get(method).push(fn); },
     close() { ws.close(); proc.kill(); }
   };
   return b;

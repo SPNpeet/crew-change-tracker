@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { png, pdf } from './gen.mjs';
+import { png, pdf, sheetRows } from './gen.mjs';
 
 const PORT = 8931;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -132,6 +132,9 @@ test('field staff cannot use office or admin functions', async () => {
   list = (await admin('GET', '/api/users')).data.users;
   assert.equal(list.find(x => x.id === S.wichai).emp_code, '');
   assert.equal((await office('PATCH', `/api/users/${S.wichai}`, { emp_code: 'X' })).status, 403);
+  const [head, ...rows] = sheetRows((await admin('GET', '/api/export/all.xlsx')).data, 5);
+  const col = head.indexOf('Employee code'), who = head.indexOf('Username');
+  assert.equal(rows.find(x => x[who] === 'somsak')[col], 'HR02', 'whole-system Excel shows the employee code');
 });
 
 test('office runs a job through the 9 steps', async () => {

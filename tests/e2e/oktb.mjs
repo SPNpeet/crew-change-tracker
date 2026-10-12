@@ -38,17 +38,25 @@ const overflow = () => b.eval(`(() => { const out = []; const W = document.docum
 const pngOf = sel => b.eval(`(async () => { const im = ${$(sel)}; await im.decode(); const cv = document.createElement('canvas'); cv.width = im.naturalWidth; cv.height = im.naturalHeight; cv.getContext('2d').drawImage(im, 0, 0); return (${b64})(await new Promise(r => cv.toBlob(r, 'image/png'))); })()`);
 const ink = sel => b.eval(`(async () => { const im = ${$(sel)}; await im.decode(); const w = im.naturalWidth, h = im.naturalHeight; const cv = document.createElement('canvas'); cv.width = w; cv.height = h; const g = cv.getContext('2d'); g.drawImage(im, 0, 0); const d = g.getImageData(0, 0, w, h).data; let l = w, r = 0, t = h, bt = 0, top = 0, red = 0; for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = (y * w + x) * 4; if (d[i] < 200 || d[i + 1] < 200 || d[i + 2] < 200) { if (x < l) l = x; if (x > r) r = x; if (y < t) t = y; if (y > bt) bt = y; if (y < h * 0.12) top++; if (d[i] > 150 && d[i + 1] < 90 && d[i + 2] < 90) red++; } } return { w, h, l: l / w, r: r / w, t: t / h, b: bt / h, top, red }; })()`);
 const save = (name, base64) => { mkdirSync(OUT, { recursive: true }); writeFileSync(join(OUT, name), Buffer.from(base64, 'base64')); };
+// Downloads are followed through Chrome's own download events, not by watching the folder.
+const dl = new Map(), dlTrace = [];
+for (const domain of ['Browser', 'Page']) {
+  b.on(domain + '.downloadWillBegin', p => { if (!dl.has(p.guid)) { dl.set(p.guid, { name: p.suggestedFilename, state: 'inProgress' }); dlTrace.push({ t: Date.now(), event: 'begin', guid: p.guid, name: p.suggestedFilename, url: String(p.url).slice(0, 120) }); } });
+  b.on(domain + '.downloadProgress', p => { const d = dl.get(p.guid); if (d && d.state !== p.state) { d.state = p.state; dlTrace.push({ t: Date.now(), event: p.state, guid: p.guid, bytes: p.receivedBytes }); } });
+}
 const download = async name => {
   const file = join(DL, name);
   rmSync(file, { force: true });
+  const before = new Set(dl.keys());
   await b.eval(`${$('#oktbf')}.requestSubmit()`);
-  const done = await eventually(() => existsSync(file) && !readdirSync(DL).some(f => f.endsWith('.crdownload')), 60000);
-  await sleep(300);
+  const mine = () => [...dl].find(([guid, d]) => !before.has(guid) && d.name === name);
+  const done = await eventually(() => { const d = mine(); return !!d && d[1].state === 'completed' && existsSync(file); }, 60000);
+  if (!done) results.push('INFO download events: ' + JSON.stringify(dlTrace.slice(-12)));
   return done ? new Uint8Array(readFileSync(file)) : null;
 };
 
 await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI));` });
-try { await b.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DL }); } catch (e) { await b.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: DL }); }
+try { await b.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DL, eventsEnabled: true }); } catch (e) { await b.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: DL }); }
 const csp = [];
 const collect = async () => csp.push(...(await b.eval(`window.__csp || []`)));
 
@@ -355,6 +363,8 @@ await collect();
 
 await call('DELETE', `/api/jobs/${longJob}`);
 ok(csp.length === 0, 'no Content-Security-Policy violation while uploading, previewing and building the PDF' + (csp.length ? ': ' + csp.join('; ') : ''));
+mkdirSync(OUT, { recursive: true });
+writeFileSync(join(OUT, 'oktb-download-events.json'), JSON.stringify({ events: dlTrace, folder: readdirSync(DL) }, null, 1));
 results.push(...b.logs.map(l => 'CONSOLE ' + l));
 b.close();
 const pass = results.filter(r => r.startsWith('PASS ')).length;
