@@ -265,6 +265,53 @@ test('a photo sent later keeps the time it was taken, corrected for the phone cl
   assert.ok(Math.abs(photos.find(p => p.id === plain.data.id).at - Date.now()) < 5000, 'without a time the server time is used');
 });
 
+test('photo retries reuse one record and reject a changed payload', async () => {
+  const jpg = new Uint8Array([255, 216, 255, 217]);
+  const path = `/api/crew/${S.c1}/photos?upload_id=regression-retry-photo-0001&point=retry&at=${Date.now()}`;
+  const before = (await office('GET', `/api/jobs/${S.job}`)).data.crew.find(c => c.id === S.c1).photos.length;
+  const first = await field('POST', path, jpg, { headers: { 'content-type': 'image/jpeg' } });
+  S.photoRetryPath = path; S.photoRetryId = first.data.id;
+  const again = await field('POST', path, jpg, { headers: { 'content-type': 'image/jpeg' } });
+  assert.equal(first.status, 200);
+  assert.equal(again.status, 200);
+  assert.equal(again.data.id, first.data.id, 'a lost response must not create another photo');
+  assert.equal(again.data.duplicate, true);
+  const after = (await office('GET', `/api/jobs/${S.job}`)).data.crew.find(c => c.id === S.c1).photos.length;
+  assert.equal(after, before + 1);
+  const changed = await field('POST', path, new Uint8Array([255, 216, 1, 255, 217]), { headers: { 'content-type': 'image/jpeg' } });
+  assert.equal(changed.status, 409, 'reusing an upload id cannot overwrite a different photo');
+  const original = await field('GET', `/api/photos/${first.data.id}`);
+  assert.deepEqual([...original.data], [...jpg]);
+});
+
+test('simultaneous photo retries create one photo and one activity entry', async () => {
+  const jpg = new Uint8Array([255, 216, 255, 217]);
+  const path = `/api/crew/${S.c1}/photos?upload_id=regression-parallel-photo-0001&point=parallel&at=${Date.now()}`;
+  const replies = await Promise.all(Array.from({ length: 5 }, () => field('POST', path, jpg, { headers: { 'content-type': 'image/jpeg' } })));
+  assert.ok(replies.every(r => r.status === 200), JSON.stringify(replies));
+  assert.equal(new Set(replies.map(r => r.data.id)).size, 1);
+  const full = (await office('GET', `/api/jobs/${S.job}`)).data;
+  assert.equal(full.crew.find(c => c.id === S.c1).photos.filter(p => p.point === 'parallel').length, 1);
+  assert.equal(full.activity.filter(a => a.kind === 'photo' && a.text.endsWith('parallel')).length, 1);
+});
+
+test('legacy photo retries are deduplicated and cross-session uploads are refused', async () => {
+  const jpg = new Uint8Array([255, 216, 255, 217]);
+  const path = `/api/crew/${S.c1}/photos?point=legacy-retry&at=${Date.now()}`;
+  const a = await field('POST', path, jpg, { headers: { 'content-type': 'image/jpeg' } });
+  const b = await field('POST', path, jpg, { headers: { 'content-type': 'image/jpeg' } });
+  assert.equal(a.status, 200);
+  assert.equal(b.data.id, a.data.id);
+  const wrongSession = await field('POST', path, jpg, { headers: { 'content-type': 'image/jpeg', 'x-cct-user': String(S.wichai) } });
+  assert.equal(wrongSession.status, 401);
+});
+
+test('authenticated photos must not be stored in the browser cache', async () => {
+  const r = await field('GET', `/api/photos/${S.photo}`);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('cache-control'), /no-store/);
+});
+
 test('owner link shows status only, without personal data', async () => {
   const full = (await office('GET', `/api/jobs/${S.job}`)).data;
   assert.ok(full.job.owner_token);
@@ -287,6 +334,8 @@ test('excel exports are valid xlsx files', async () => {
   const txt = Buffer.from(r.data).toString('utf8');
   assert.ok(txt.includes('xl/worksheets/sheet3.xml'));
   assert.ok(txt.includes('Rafael Mendoza'));
+  assert.ok(txt.includes('Crew change summary') && txt.includes('Checkpoint (EN)') && txt.includes('Landed'));
+  assert.ok(txt.includes('Doc: Flight ticket') && !txt.includes('Doc: ตั๋วเครื่องบิน'), 'built-in document heading is English without changing stored document keys');
   r = await office('GET', '/api/export/all.xlsx');
   assert.equal(r.status, 200);
   assert.equal((await field('GET', `/api/jobs/${S.job}/export.xlsx`)).status, 403);
@@ -297,7 +346,7 @@ test('email templates are editable by the admin only', async () => {
   assert.deepEqual(Object.keys(def).sort(), ['appoint', 'gate', 'morning', 'night', 'plan', 'sched', 'update']);
   assert.ok(def.appoint.includes('{{services_line}}') && def.morning.includes('MORNING UPDATE'));
   const mine = { ...def, appoint: 'Subject: TEMPLATE-CHANGED {{vessel}}\r\n\r\n{{signature}}' };
-  let r = await admin('PUT', '/api/settings', { mail_tpl: mine });
+  let r = await admin('PUT', '/api/settings', { mail_tpl: mine, mail_tpl_expected: def });
   assert.equal(r.status, 200);
   assert.equal(r.data.settings.mail_tpl.appoint, 'Subject: TEMPLATE-CHANGED {{vessel}}\n\n{{signature}}');
   assert.equal((await office('GET', '/api/me')).data.settings.mail_tpl.appoint, r.data.settings.mail_tpl.appoint);
@@ -311,7 +360,7 @@ test('email templates are editable by the admin only', async () => {
   assert.equal((await field('PUT', '/api/settings', { mail_tpl: def })).status, 403);
   assert.equal((await office('PUT', '/api/settings', { mail_tpl: def })).status, 403);
   assert.equal((await admin('GET', '/api/me')).data.settings.mail_tpl.appoint, r.data.settings.mail_tpl.appoint, 'refused writes change nothing');
-  assert.deepEqual((await admin('PUT', '/api/settings', { mail_tpl: def })).data.settings.mail_tpl, def);
+  assert.deepEqual((await admin('PUT', '/api/settings', { mail_tpl: def, mail_tpl_expected: r.data.settings.mail_tpl })).data.settings.mail_tpl, def);
 });
 
 const PRIVATE = ['TEST-PP-778899', 'SIRB-TEST', '2031-04-17', '2029-12-01', 'scan-test'];
@@ -546,6 +595,10 @@ test('settings validation and closing a job', async () => {
   assert.equal(r.data.settings.late_min, 15);
   assert.equal((await office('PUT', '/api/settings', { late_min: 20 })).status, 403);
   assert.equal((await office('PATCH', `/api/jobs/${S.job}`, { status: 'closed' })).status, 200);
+  const retry = await field('POST', S.photoRetryPath, new Uint8Array([255, 216, 255, 217]), { headers: { 'content-type': 'image/jpeg' } });
+  assert.equal(retry.status, 200, 'a response lost before closure can still be acknowledged');
+  assert.equal(retry.data.id, S.photoRetryId);
+  assert.equal((await field('POST', `/api/crew/${S.c1}/photos?upload_id=new-after-closure-0001`, new Uint8Array([255, 216, 255, 217]), { headers: { 'content-type': 'image/jpeg' } })).status, 409);
   assert.equal((await field('POST', `/api/crew/${S.c1}/confirm`, { idx: 1 })).status, 409, 'closed job is read-only');
   assert.equal((await field('GET', '/api/field')).data.crew.length, 0, 'closed jobs leave the field list');
   const closed = (await office('GET', '/api/jobs?status=closed')).data.jobs;
@@ -624,6 +677,8 @@ test('password change signs out other sessions', async () => {
   assert.equal((await field2('POST', '/api/me/password', { current: 'field12345', password: 'newpass123' })).status, 200);
   assert.equal((await other('GET', '/api/me')).status, 401);
   assert.equal((await field2('GET', '/api/me')).status, 200);
-  assert.equal((await field2('POST', '/api/logout')).status, 200);
+  const logout = await field2('POST', '/api/logout');
+  assert.equal(logout.status, 200);
+  assert.equal(logout.headers.get('clear-site-data'), '"cache"', 'clear legacy cached photos without deleting unsent storage');
   assert.equal((await field2('GET', '/api/me')).status, 401);
 });

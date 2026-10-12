@@ -11,7 +11,9 @@ export function hm(ms) { if (ms == null) return '—'; const p = parts(ms); retu
 export function hms(ms) { const p = parts(ms); return pad(p.h) + ':' + pad(p.mi) + ':' + pad(p.s); }
 export function fmtD(ms) { if (ms == null) return '—'; const p = parts(ms); return pad(p.d) + '/' + pad(p.mo) + ' ' + hm(ms); }
 export function fmtFull(ms) { if (ms == null) return '—'; const p = parts(ms); return `${pad(p.d)}/${pad(p.mo)}/${p.y + 543} ${hm(ms)}`; }
+export function fmtFullEn(ms) { if (ms == null) return '—'; const p = parts(ms); return `${p.y}-${pad(p.mo)}-${pad(p.d)} ${hm(ms)}`; }
 export function dateTh(ms) { const p = parts(ms); return `${pad(p.d)}/${pad(p.mo)}/${p.y + 543}`; }
+export const documentNameEn = name => name === 'ตั๋วเครื่องบิน' ? 'Flight ticket' : name;
 const sameDay = (a, b) => { const x = parts(a), y = parts(b); return x.y === y.y && x.mo === y.mo && x.d === y.d; };
 export function dhm(ms) { if (ms == null) return '—'; return sameDay(ms, Date.now()) ? hm(ms) : fmtD(ms); }
 export function dur(min) { min = Math.max(0, Math.round(min)); if (min < 60) return min + ' นาที'; return Math.floor(min / 60) + ' ชม. ' + (min % 60) + ' นาที'; }

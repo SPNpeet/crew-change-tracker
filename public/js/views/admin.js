@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { esc, fmtFull, mail, DEFAULT_TPL, DEFAULT_OKTB } from '../core.js';
 import { icon, toast, openDialog, dlgHead, dlgFoot, uploadType } from '../ui.js';
 import { roleLabel } from './auth.js';
+import { storageCard } from '../storage.js';
 
 const app = () => document.getElementById('app');
 const TABS = [['users', 'ผู้ใช้งาน'], ['vehicles', 'รถและคนขับ'], ['hotels', 'โรงแรม'], ['points', 'จุดสถานะ'], ['general', 'ตั้งค่าทั่วไป'], ['backup', 'สำรองข้อมูล']];
@@ -102,16 +103,18 @@ export async function enter(r, alive) {
   }
   if (tab === 'general') {
     const s = A.settings;
+    const storage = await api('GET', '/api/storage').catch(() => null);
+    if (!alive()) return;
     const tpl = { ...DEFAULT_TPL, ...s.mail_tpl };
     const ok = { ...DEFAULT_OKTB, ...s.oktb };
     PREVIEW = null;
     el().className = 'stack';
-    el().innerHTML = `<form id="genform" class="card"><div class="card-h"><h3>ตั้งค่าทั่วไป</h3></div><div class="card-b form">
+    el().innerHTML = `${storageCard(storage)}<form id="genform" class="card"><div class="card-h"><h3>ตั้งค่าทั่วไป</h3></div><div class="card-b form">
       <label class="f">ชื่อบริษัท (ไทย)<input name="name_th" value="${esc(s.company.name_th)}" maxlength="120"></label>
       <label class="f">ชื่อบริษัท (อังกฤษ)<input name="name" value="${esc(s.company.name)}" maxlength="120"></label>
       <label class="f" style="grid-column:1 / -1">ลายเซ็นท้ายอีเมล<textarea name="signature" rows="3" maxlength="400">${esc(s.company.signature)}</textarea></label>
       <label class="f">ถือว่า "ช้ากว่าแผน" เมื่อเกิน (นาที)<input name="late_min" type="number" min="1" max="240" value="${s.late_min}" required></label>
-      <div></div>
+      <label class="f">เตือนเมื่อใช้พื้นที่รูปถึง (%)<input name="storage_warning_percent" type="number" min="1" max="99" value="${s.storage_warning_percent}" required><span class="fhelp">ค่าเริ่มต้น 80% ผู้ดูแลปรับได้ 1–99% เป็นจุดแจ้งเตือน ไม่เปลี่ยนโควตาพื้นที่หรือราคา</span></label>
       <label class="f">เอกสารที่ต้องมีต่อคน (บรรทัดละ 1 รายการ)<textarea name="docs" rows="5">${esc(s.docs.join('\n'))}</textarea></label>
       <label class="f">เรื่องที่ได้รับแต่งตั้ง (บรรทัดละ 1 รายการ)<textarea name="services" rows="5">${esc(s.services.join('\n'))}</textarea></label>
       <div class="ferr" role="alert" style="grid-column:1 / -1"></div>
@@ -145,6 +148,7 @@ export async function enter(r, alive) {
         <div style="grid-column:1 / -1"><button class="btn" type="submit">${icon('check')}บันทึกเอกสาร OK TO BOARD</button></div>
       </form>
     </div></div>`;
+    document.getElementById('mailform').mailExpected = structuredClone(tpl);
     loadPreview(alive);
     return;
   }
@@ -156,12 +160,12 @@ export async function enter(r, alive) {
     const table = (list, label) => list.length ? `<div class="scroll"><table class="t nw"><thead><tr><th>${label}</th><th>ขนาด</th><th>สร้างเมื่อ</th><th></th></tr></thead><tbody>${list.map(b => `<tr><td class="nm">${esc(b.name.replace('daily/', '').replace(/\.(xlsx|json\.gz)$/, ''))}</td><td>${Math.max(1, Math.round(b.size / 1024))} KB</td><td>${fmtFull(Date.parse(b.uploaded))}</td><td class="acts"><a class="btn line sm" href="/api/backups/${b.name.split('/').map(encodeURIComponent).join('/')}" download>${icon('download')}ดาวน์โหลด</a></td></tr>`).join('')}</tbody></table></div>` : '';
     el().className = 'stack';
     el().innerHTML = `<div class="card"><div class="card-h"><h3>ดาวน์โหลดข้อมูลทั้งหมดตอนนี้</h3></div><div class="card-b"><p class="muted s14" style="margin-top:0">ไฟล์ Excel รวมงาน ลูกเรือ Time log ความเคลื่อนไหว ผู้ใช้ รถ และโรงแรม</p><a class="btn" href="/api/export/all.xlsx" download>${icon('download')}ดาวน์โหลด Excel ทั้งระบบ</a></div></div>
-      <div class="card"><div class="card-h"><h3>สำรองทั้งระบบทุกคืน</h3><span class="sub">02:00 ทุกคืน · เก็บย้อนหลัง 35 วัน · ใช้กู้ระบบได้ทั้งหมด</span></div>
+      <div class="card"><div class="card-h"><h3>สำรองฐานข้อมูลทุกคืน</h3><span class="sub">02:00 ทุกคืน · เก็บย้อนหลัง 35 วัน</span></div>
         ${table(nightly.slice(0, 7), 'วันที่') || '<div class="card-b muted">ไฟล์แรกจะถูกสร้างคืนนี้เวลา 02:00</div>'}
-        <div class="card-b muted s13">ไฟล์ทุกคืนและรูปถ่ายทั้งหมด ถูกดึงไปเก็บที่ NAS ของบริษัทอัตโนมัติ (ตั้งค่าครั้งเดียวที่ NAS ตามคู่มือหัวข้อสำรองข้อมูล)</div></div>
-      <div class="card"><div class="card-h"><h3>ไฟล์ Excel รายเดือน</h3><span class="sub">สร้างให้อัตโนมัติทุกวันที่ 1 ของเดือน</span></div>
-        ${table(monthly, 'เดือน') || '<div class="card-b muted">ยังไม่มีไฟล์ ไฟล์แรกจะถูกสร้างในวันที่ 1 ของเดือนถัดไป</div>'}</div>
-      <p class="muted s13">ฐานข้อมูลยังสำรองอัตโนมัติอีกชั้น กู้คืนย้อนหลังได้ 30 วัน (ติดต่อผู้พัฒนา)</p>`;
+        <div class="card-b muted s13">ไฟล์นี้เก็บข้อมูลฐานข้อมูล ไม่รวมไฟล์รูปถ่าย ต้องตั้งค่าและตรวจสอบการสำรองรูปกับข้อมูลไปยัง NAS ตามคู่มือ และทดลองกู้คืนก่อนยืนยันความพร้อม</div></div>
+      <div class="card"><div class="card-h"><h3>ไฟล์ Excel รายเดือน</h3></div><div class="card-b muted s13">เก็บข้อมูลทั้งระบบ ณ เวลาสร้าง ไม่ได้กรองเฉพาะเดือนในชื่อไฟล์ เริ่มสร้างวันที่ 1 และลองใหม่ถึงวันที่ 7 หากยังไม่มีไฟล์</div>
+        ${table(monthly, 'เดือนในชื่อไฟล์') || '<div class="card-b muted">ยังไม่มีไฟล์ Excel รายเดือน</div>'}</div>
+      <p class="muted s13">ระยะเวลากู้ฐานข้อมูลย้อนหลังขึ้นกับแผนบริการที่ใช้งาน กรุณาตรวจสอบกับผู้ดูแลก่อนใช้งาน</p>`;
   }
 }
 
@@ -350,7 +354,7 @@ document.addEventListener('submit', async e => {
         f.elements[blank[0]].closest('details').open = true;
         throw new Error(`ข้อความ "${blank[1]}" ว่างอยู่ พิมพ์ข้อความหรือกดคืนค่าเริ่มต้นก่อนบันทึก`);
       }
-      body = { mail_tpl: Object.fromEntries(MAIL_KINDS.map(([k]) => [k, f.elements[k].value])) };
+      body = { mail_tpl: Object.fromEntries(MAIL_KINDS.map(([k]) => [k, f.elements[k].value])), mail_tpl_expected: f.mailExpected };
     } else if (f.id === 'oktbform') {
       const o = Object.fromEntries(Object.keys(DEFAULT_OKTB).map(k => [k, f.elements[k].value]));
       if (!o.intro.trim() || !o.guarantee.trim()) throw new Error('ย่อหน้าในจดหมายว่างอยู่ พิมพ์ข้อความหรือกดคืนค่าเริ่มต้นก่อนบันทึก');
@@ -358,11 +362,16 @@ document.addEventListener('submit', async e => {
     } else {
       const fd = new FormData(f);
       const lines = k => String(fd.get(k) || '').split('\n').map(s => s.trim()).filter(Boolean);
-      body = { company: { name: fd.get('name'), name_th: fd.get('name_th'), signature: fd.get('signature') }, late_min: +fd.get('late_min'), docs: lines('docs'), services: lines('services') };
+      body = { company: { name: fd.get('name'), name_th: fd.get('name_th'), signature: fd.get('signature') }, late_min: +fd.get('late_min'), storage_warning_percent: +fd.get('storage_warning_percent'), docs: lines('docs'), services: lines('services') };
     }
     const r = await api('PUT', '/api/settings', body);
     A.settings = r.settings;
-    toast(f.id === 'mailform' ? 'บันทึกข้อความอีเมลแล้ว' : f.id === 'oktbform' ? 'บันทึกเอกสาร OK TO BOARD แล้ว' : 'บันทึกการตั้งค่าแล้ว');
+    if (f.id === 'mailform') f.mailExpected = structuredClone(r.settings.mail_tpl);
+    if (f.id === 'genform') {
+      const storage = await api('GET', '/api/storage').catch(() => null);
+      if (f.isConnected) document.querySelector('.storage-status')?.replaceWith(document.createRange().createContextualFragment(storageCard(storage)));
+    }
+        toast(f.id === 'mailform' ? 'บันทึกข้อความอีเมลแล้ว' : f.id === 'oktbform' ? 'บันทึกเอกสาร OK TO BOARD แล้ว' : 'บันทึกการตั้งค่าแล้ว');
   } catch (x) { err.textContent = x.message; }
   finally { btn.disabled = false; }
 });

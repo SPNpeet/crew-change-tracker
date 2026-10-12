@@ -4,22 +4,43 @@ import { esc, hm, fmtD, dhm, avatar, pill, nextIdx, statusEn, currentEn, lastTim
 
 const app = () => document.getElementById('app');
 let D = null, token = null;
+let requestSeq = 0;
+const current = (key, seq) => seq === requestSeq && A.route.name === 'owner' && A.route.params.token === key;
+function unavailable() {
+  D = null;
+  app().innerHTML = `<div class="owner"><div class="card card-b empty"><div class="nm">This tracking link is not available</div><div class="sub">The link may have been replaced or expired. Please ask your agent for the latest link.</div></div></div>`;
+}
 
-export async function enter(r) {
+export async function enter(r, alive = () => true) {
   token = r.params.token;
+  const key = token, seq = ++requestSeq;
+  D = null;
+  app().innerHTML = '<div class="owner"><div class="card card-b">Loading tracking information...</div></div>';
   document.title = 'Crew change tracking';
   document.documentElement.lang = 'en';
   try {
-    D = await api('GET', `/api/public/${token}`, undefined, { allow401: true });
+    const data = await api('GET', `/api/public/${key}`, undefined, { allow401: true });
+    if (!alive() || !current(key, seq)) return;
+    D = data;
   } catch (e) {
-    app().innerHTML = `<div class="owner"><div class="card card-b empty"><div class="nm">This tracking link is not available</div><div class="sub">The link may have been replaced. Please ask your agent for the latest link.</div></div></div>`;
+    if (!alive() || !current(key, seq)) return;
+    unavailable();
     return;
   }
   render();
 }
 
 export async function poll() {
-  try { D = await api('GET', `/api/public/${token}`, undefined, { allow401: true }); render(); } catch (e) {}
+  const key = token, seq = ++requestSeq;
+  try {
+    const data = await api('GET', `/api/public/${key}`, undefined, { allow401: true });
+    if (!current(key, seq)) return;
+    D = data; render();
+  } catch (e) {
+    if (!current(key, seq)) return;
+    if (e.status === 404 || e.status === 403) unavailable();
+    else { const foot = app().querySelector('.ow-foot'); if (foot) foot.textContent = 'Connection interrupted. Displayed information may be out of date; retrying automatically.'; }
+  }
 }
 
 function render() {

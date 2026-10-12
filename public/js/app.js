@@ -1,4 +1,4 @@
-import { api, flushOutbox, pendingCount } from './api.js';
+import { api, flushOutbox, pendingCount, LOGOUT_EVENT } from './api.js';
 import { esc, hm } from './core.js';
 import { icon, toast, closeLb, busy } from './ui.js';
 import * as auth from './views/auth.js';
@@ -51,29 +51,34 @@ export function go(path, replace) {
 
 let loadSeq = 0;
 export async function route() {
+  const seq = ++loadSeq;
+  const alive = () => seq === loadSeq;
   const r = parse(location.pathname);
   closeLb();
   const dlg = document.getElementById('dlg');
   if (dlg.open) dlg.close();
-  if (r.name === 'owner') { A.route = r; chrome(false); return VIEWS.owner.enter(r); }
+  if (r.name === 'owner') { A.route = r; chrome(false); return VIEWS.owner.enter(r, alive); }
   if (!A.me && !['login', 'setup'].includes(r.name)) {
     try { await boot(); } catch (e) {
+      if (!alive()) return;
       if (e.status === 401) return go('/login' , true);
       A.route = { name: 'error', params: {} };
       chrome(false);
       document.getElementById('app').innerHTML = `<div class="center-card card card-b"><h3>เชื่อมต่อระบบไม่ได้</h3><p class="muted">${esc(e.message)}</p><button class="btn" type="button" data-act="reload">${icon('refresh')}ลองใหม่</button></div>`;
       return;
     }
+    if (!alive()) return;
   }
   if (r.name === 'home') return go(A.isOffice() ? '/jobs' : '/field', true);
   if (A.me && ['jobs', 'newjob', 'job', 'report'].includes(r.name) && !A.isOffice()) return go('/field', true);
   if (r.name === 'admin' && !A.isAdmin()) return go('/', true);
   A.route = r;
+  document.documentElement.lang = 'th';
+  document.title = 'Crew Change Tracker';
   chrome(!!A.me && r.name !== 'report' && !['login', 'setup'].includes(r.name));
-  const seq = ++loadSeq;
   const view = VIEWS[r.name];
-  await view.enter(r, () => seq === loadSeq);
-  window.scrollTo(0, 0);
+  await view.enter(r, alive);
+  if (alive()) window.scrollTo(0, 0);
 }
 
 export async function boot() {
@@ -139,12 +144,24 @@ A.actions.reload = () => location.reload();
 A.actions.back = () => { if (history.state && history.state.app) history.back(); else go(A.isOffice() ? '/jobs' : '/field', true); };
 
 window.addEventListener('popstate', route);
-window.addEventListener('cct-logout', () => { if (A.route.name !== 'owner' && A.route.name !== 'login') { A.me = null; go('/login', true); } });
+function leaveSession() {
+  if (A.route.name === 'owner' || A.route.name === 'login' || A.route.name === 'setup') return;
+  A.me = null;
+  closeLb();
+  chrome(false);
+  document.getElementById('app').replaceChildren();
+  location.replace('/login');
+}
+window.addEventListener('cct-logout', leaveSession);
+window.addEventListener('storage', e => { if (e.key === LOGOUT_EVENT) leaveSession(); });
+// Do not leave an authenticated photo or DOM snapshot in the back/forward cache.
+window.addEventListener('pagehide', () => { if (A.me) { closeLb(); document.getElementById('app').replaceChildren(); chrome(false); } });
+window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
 
 function tick() {
   document.getElementById('clock').textContent = hm(Date.now());
   const view = VIEWS[A.route.name];
-  if (document.visibilityState === 'visible' && view && view.poll && !busy()) view.poll(A.route);
+  if (document.visibilityState === 'visible' && view && view.poll && !busy()) Promise.resolve(view.poll(A.route)).catch(() => {});
 }
 setInterval(tick, 20000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tick(); });

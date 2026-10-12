@@ -1,5 +1,5 @@
 import { A, go, flushPending } from '../app.js';
-import { api, confirmPoint, uploadPhoto, pendingFor } from '../api.js';
+import { api, confirmPoint, prepareAndUploadPhoto, pendingFor } from '../api.js';
 import { esc, hm, dhm, fmtD, avatar, pill, nextIdx, status, planCell, expected, doneCount, MIN } from '../core.js';
 import { icon, toast, openLb, stampPhoto, getGps } from '../ui.js';
 import { roleLabel } from './auth.js';
@@ -36,6 +36,7 @@ export async function poll() {
 }
 
 function render(keep) {
+  if (!A.me || !F || !['field', 'crew'].includes(A.route.name)) return;
   const y = window.scrollY;
   const old = keep && document.getElementById('noteedit');
   const draft = old && !old.hidden ? old.querySelector('textarea').value : null;
@@ -116,10 +117,10 @@ export const actions = {
   async 'f-confirm'(t) {
     if (t.disabled) return;
     t.disabled = true;
-    const c = crewOf(t.dataset.id), idx = +t.dataset.idx;
+    const c = crewOf(t.dataset.id), idx = +t.dataset.idx, uid = A.me.id;
     const gps = await Promise.race([getGps(), new Promise(r => setTimeout(() => r(null), 1500))]);
     try {
-      const r = await confirmPoint(c.id, idx, { ...(gps ? { lat: gps.lat, lng: gps.lng } : {}), label: `"${c.cps[idx].name}" ของ ${c.name}` }, A.me.id);
+      const r = await confirmPoint(c.id, idx, { ...(gps ? { lat: gps.lat, lng: gps.lng } : {}), label: `"${c.cps[idx].name}" ของ ${c.name}` }, uid);
       c.cps[idx].actual = r.at;
       if (r.queued) { c.cps[idx].pending = true; toast(`ไม่มีสัญญาณ บันทึกเวลา ${hm(r.at)} ไว้ในเครื่องแล้ว ระบบส่งเองเมื่อมีสัญญาณ`, 4000); }
       else toast(`บันทึก "${c.cps[idx].name}" เวลา ${hm(r.at)} แล้ว สำนักงานเห็นทันที`);
@@ -149,22 +150,26 @@ export const actions = {
 
 export const changes = {
   async 'f-photo'(t) {
+    if (t.disabled) return;
     const file = t.files && t.files[0];
     t.value = '';
     if (!file) return;
-    if (!file.type.startsWith('image/')) return toast('เลือกได้เฉพาะไฟล์รูป');
+    if (!file.type.startsWith('image/')) return toast('กรุณาเลือกรูปภาพ');
     const c = crewOf(t.dataset.id);
     const job = F.jobs.find(j => j.id === c.job_id) || {};
-    toast('กำลังบันทึกรูป...', 8000);
-    let out;
+    const inputs = [...document.querySelectorAll('[data-chg="f-photo"]')];
+    inputs.forEach(input => { input.disabled = true; });
+    const uid = A.me.id, point = t.dataset.point;
+    toast('กำลังเตรียมรูป...', 8000);
     try {
-      out = await stampPhoto(file, { point: t.dataset.point, name: c.name, rank: c.rank, vessel: job.vessel || '', company: A.settings.company.name });
-    } catch (e) { return toast('เปิดไฟล์รูปนี้ไม่ได้'); }
-    const point = t.dataset.point;
-    const r = await uploadPhoto(c.id, out.blob, { point, lat: out.gps ? out.gps.lat.toFixed(6) : null, lng: out.gps ? out.gps.lng.toFixed(6) : null, label: `"${point}" ของ ${c.name}` }, A.me.id);
-    if (r.queued) return toast('ไม่มีสัญญาณ เก็บรูปไว้ในเครื่องแล้ว ระบบส่งเองเมื่อมีสัญญาณ', 4000);
-    toast(out.gps ? 'บันทึกรูปพร้อมเวลาและพิกัดแล้ว' : 'บันทึกรูปพร้อมเวลาแล้ว (ไม่ได้เปิด GPS)');
-    await poll();
+      const r = await prepareAndUploadPhoto(c.id, file, { point, label: `"${point}" ของ ${c.name}` },
+        () => stampPhoto(file, { point, name: c.name, rank: c.rank, vessel: job.vessel || '', company: A.settings.company.name }), uid);
+      if (r.repeated) return toast('รูปนี้ถูกบันทึกหรืออยู่ในคิวส่งแล้ว ไม่ได้เพิ่มรูปซ้ำ');
+      if (r.error) return toast(`${r.error} · เก็บสำเนาไว้แล้ว ดูที่บัญชี > งานที่ยังส่งไม่สำเร็จ`, 8000);
+      if (r.queued) return toast('เก็บรูปไว้ในเครื่องแล้ว จะส่งให้อัตโนมัติเมื่อออนไลน์ ดูรายการได้ที่บัญชีของฉัน', 4000);
+      toast(r.gps ? 'บันทึกรูปพร้อมเวลาและพิกัดแล้ว' : 'บันทึกรูปพร้อมเวลาแล้ว (ไม่มีพิกัด GPS)');
+      await poll();
+    } finally { inputs.forEach(input => { input.disabled = false; }); }
   }
 };
 

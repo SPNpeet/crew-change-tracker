@@ -1,7 +1,8 @@
 import { A, go } from '../app.js';
 import { api } from '../api.js';
 import { esc, fmtD, dateTh, toInput, fromInput } from '../core.js';
-import { icon } from '../ui.js';
+import { icon, toast } from '../ui.js';
+import { storageCard } from '../storage.js';
 
 const app = () => document.getElementById('app');
 
@@ -38,18 +39,19 @@ export async function enter(r, alive) {
       btn.disabled = true;
       try {
         const d = await api('POST', '/api/jobs', readJobForm(new FormData(e.target)));
-        go(`/jobs/${d.id}/1`, true);
+        if (alive()) go(`/jobs/${d.id}/1`, true);
       } catch (x) { e.target.querySelector('.ferr').textContent = x.message; btn.disabled = false; }
     });
     return;
   }
   const status = r.params.status === 'closed' ? 'closed' : 'open';
   app().innerHTML = `<div class="page-h"><div><h1>งานเปลี่ยนลูกเรือ</h1><div class="muted s14">${status === 'open' ? 'งานที่กำลังดำเนินการ' : 'งานที่ปิดแล้ว'}</div></div><div class="row"><div class="seg" role="tablist"><a href="/jobs" data-link aria-current="${status === 'open'}">กำลังทำ</a><a href="/jobs?status=closed" data-link aria-current="${status === 'closed'}">ปิดแล้ว</a></div>${status === 'open' ? `<a class="btn" href="/jobs/new" data-link>${icon('plus')}เปิดงานใหม่</a>` : ''}</div></div><div id="joblist" class="muted">กำลังโหลด...</div>`;
-  const d = await api('GET', `/api/jobs?status=${status}`);
+  const [d, storage] = await Promise.all([api('GET', `/api/jobs?status=${status}`), api('GET', '/api/storage').catch(() => null)]);
   if (!alive()) return;
   const el = document.getElementById('joblist');
+  el.insertAdjacentHTML('beforebegin', storageCard(storage, A.isAdmin()));
   if (status === 'open' && A.isAdmin()) {
-    const nUsers = A.users.filter(u => u.active).length, nVeh = A.vehicles.length, nHot = A.hotels.length;
+    const nUsers = A.users.filter(u => u.active).length, nVeh = A.vehicles.filter(v => v.active).length, nHot = A.hotels.filter(h => h.active).length;
     if (nUsers < 2 || !nVeh || !nHot) {
       const li = (ok, href, name, note) => `<li class="${ok ? 'done' : ''}"><span class="st">${ok ? icon('check') : ''}</span><span><a href="${href}" data-link>${name}</a><span class="sub">${note}</span></span></li>`;
       el.insertAdjacentHTML('beforebegin', `<div class="card start"><div class="card-h"><h3>เริ่มใช้งานระบบ</h3><span class="sub">ทำครั้งเดียว แล้วกล่องนี้จะหายไป</span></div><div class="card-b"><ol>
@@ -65,7 +67,7 @@ export async function enter(r, alive) {
     return;
   }
   el.className = 'jobgrid';
-  el.innerHTML = d.jobs.map(j => {
+  const cards = rows => rows.map(j => {
     const done = j.steps.filter(Boolean).length;
     return `<a class="card jobtile" href="/jobs/${j.id}" data-link>
       <div class="jt-top"><div class="v">${esc(j.vessel)}</div>${j.status === 'closed' ? '<span class="pill gray">ปิดแล้ว</span>' : `<span class="pill ${done === 9 ? 'ok' : 'info'}">${done} / 9 ขั้นตอน</span>`}</div>
@@ -73,4 +75,27 @@ export async function enter(r, alive) {
       <dl><div><dt>ETA</dt><dd>${j.eta ? fmtD(j.eta) : '—'}</dd></div><div><dt>ลูกเรือ</dt><dd>On ${j.n_on} · Off ${j.n_off}</dd></div><div><dt>${j.status === 'closed' ? 'ปิดงาน' : 'เปิดงาน'}</dt><dd>${dateTh(j.closed_at || j.created_at)}</dd></div></dl>
       <div class="bar"><i style="width:${Math.round(done / 9 * 100)}%"></i></div></a>`;
   }).join('');
+  el.innerHTML = cards(d.jobs);
+  if (d.nextOffset != null) {
+    const more = document.createElement('button');
+    more.type = 'button'; more.className = 'btn line block';
+    more.textContent = 'โหลดงานเพิ่มเติม'; more.style.marginTop = '16px';
+    more.dataset.act = 'jobs-more'; el.after(more);
+    let offset = d.nextOffset;
+    const seen = new Set(d.jobs.map(j => j.id));
+    more.addEventListener('click', async () => {
+      if (more.disabled || offset == null) return;
+      more.disabled = true;
+      try {
+        const next = await api('GET', `/api/jobs?status=${status}&offset=${offset}`);
+        if (!alive()) return;
+        const rows = next.jobs.filter(j => !seen.has(j.id));
+        rows.forEach(j => seen.add(j.id));
+        el.insertAdjacentHTML('beforeend', cards(rows));
+        offset = next.nextOffset;
+        if (offset == null) more.remove();
+      } catch (e) { if (alive()) toast(e.message); }
+      finally { more.disabled = false; }
+    });
+  }
 }
