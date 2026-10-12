@@ -105,6 +105,20 @@ export const DEFAULT_TPL = {
   update: '{{to}}Subject: {{vessel}} – CREW CHANGE UPDATE {{time}}\n\nDear {{owner}},\n\n{{status_lines}}\n\n{{signature}}'
 };
 
+export const DEFAULT_OKTB = {
+  pic_name: '',
+  pic_mobile: '',
+  signer_name: '',
+  signer_title: 'Operation',
+  footer: 'As Agents Only, E.&.O.E.',
+  subject: 'Letter of Guarantee / OK to Board',
+  intro: 'We are {{company}} who is agent of {{vessel}} is calling {{port}}, Thailand on {{call_date}}. Please be informed that following the crew personnel is scheduled to attend the vessel at {{port}}, Thailand on {{call_date}}.',
+  guarantee: "On arrival in Thailand, we will meet the above named and assist them to attend the vessel, We will also be responsible for the maintenance and hotel arrangement during they stay in Thailand prior attending the vessel and arrange for them repatriation to crew home town in case they're unable to attend the vessel at {{port}}. We guarantee for all those above persons during stay at Thailand till depart from Thailand.\n\nWe, {{company}} is sponsoring him at the airport.\nAll expenses to be incurred during their stay in Thailand, it will be response by our company"
+};
+export const FILE_KINDS = [['passport', 'พาสปอร์ต'], ['sirb', 'Seaman book'], ['ticket', 'ตั๋วเครื่องบิน'], ['other', 'อื่น ๆ']];
+export const fileSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+export const ymdOf = ms => { if (ms == null) return ''; const p = parts(ms); return `${p.y}-${pad(p.mo)}-${pad(p.d)}`; };
+
 export const render = (tpl, vars) => String(tpl).replace(/\{\{(\w+)\}\}/g, (m, k) => (Object.hasOwn(vars, k) ? String(vars[k] ?? '-') : m));
 
 export function mail(kind, job, crew, ctx) {

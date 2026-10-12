@@ -1,0 +1,17 @@
+ALTER TABLE crew ADD COLUMN passport_exp TEXT NOT NULL DEFAULT '';
+ALTER TABLE crew ADD COLUMN sirb_no TEXT NOT NULL DEFAULT '';
+ALTER TABLE crew ADD COLUMN sirb_exp TEXT NOT NULL DEFAULT '';
+ALTER TABLE jobs ADD COLUMN oktb TEXT NOT NULL DEFAULT '{}';
+
+CREATE TABLE crew_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  crew_id INTEGER NOT NULL REFERENCES crew(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('passport', 'sirb', 'ticket', 'other')),
+  name TEXT NOT NULL DEFAULT '',
+  mime TEXT NOT NULL,
+  r2_key TEXT NOT NULL UNIQUE,
+  size INTEGER NOT NULL,
+  at INTEGER NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX crew_files_crew ON crew_files(crew_id);

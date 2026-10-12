@@ -11,7 +11,7 @@ const raw = readFileSync(input);
 const dump = JSON.parse((input.endsWith('.gz') ? gunzipSync(raw) : raw).toString('utf8'));
 if (dump.format !== 'cct-backup' || dump.version !== 1) throw new Error('not a Crew Change Tracker backup file');
 
-const ORDER = ['users', 'settings', 'vehicles', 'hotels', 'jobs', 'crew', 'checkpoints', 'notes', 'photos', 'activity'];
+const ORDER = ['users', 'settings', 'vehicles', 'hotels', 'jobs', 'crew', 'checkpoints', 'notes', 'photos', 'crew_files', 'activity'];
 const lit = v => v === null || v === undefined ? 'NULL' : typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`;
 
 const lines = ['PRAGMA defer_foreign_keys = on;', 'DELETE FROM sessions;'];

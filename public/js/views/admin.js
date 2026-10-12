@@ -1,7 +1,7 @@
 import { A, go, reloadRefs } from '../app.js';
 import { api } from '../api.js';
-import { esc, fmtFull, mail, DEFAULT_TPL } from '../core.js';
-import { icon, toast, openDialog, dlgHead, dlgFoot } from '../ui.js';
+import { esc, fmtFull, mail, DEFAULT_TPL, DEFAULT_OKTB } from '../core.js';
+import { icon, toast, openDialog, dlgHead, dlgFoot, uploadType } from '../ui.js';
 import { roleLabel } from './auth.js';
 
 const app = () => document.getElementById('app');
@@ -41,6 +41,22 @@ const VAR_TH = {
   time: 'เวลาตอนสร้างร่าง (ชม.:นาที)',
   signature: 'ลายเซ็นท้ายอีเมล'
 };
+
+const BRAND = [
+  ['letterhead', 'หัวจดหมาย', 'แถบโลโก้และที่อยู่บริษัท วางเต็มความกว้างด้านบนของจดหมาย'],
+  ['signature', 'ลายเซ็น', 'ลายเซ็นของผู้ลงนามท้ายจดหมาย'],
+  ['stamp', 'ตราประทับ', 'ตราประทับบริษัท วางข้างลายเซ็น']
+];
+const OKTB_VARS = [['company', 'ชื่อบริษัทในจดหมาย (แก้ได้ตอนสร้างเอกสาร)'], ['vessel', 'ชื่อเรือ'], ['port', 'ท่าเรือ'], ['call_date', 'วันที่เรือเข้าเทียบท่า เช่น 19 September 2026']];
+
+function brandTiles() {
+  return BRAND.map(([k, l, d]) => {
+    const at = A.brand[k];
+    return `<div class="brand"><div class="brand-pv">${at ? `<img src="/api/brand/${k}?v=${at}" alt="${l}">` : '<span>ยังไม่มีรูป</span>'}</div><div class="brand-i"><b>${l}</b><span class="sub">${d}</span>
+      <div class="row"><label class="btn line sm">${icon('image')}${at ? 'เปลี่ยนรูป' : 'อัปโหลดรูป'}<input type="file" accept="image/png,image/jpeg" data-chg="a-brand" data-kind="${k}" hidden></label>${at ? `<button class="btn line sm danger" data-act="a-branddel" data-kind="${k}" type="button">${icon('trash')}ลบรูป</button>` : ''}</div>
+      <div class="fstat" role="status"></div><div class="ferr" role="alert"></div></div></div>`;
+  }).join('');
+}
 
 export async function enter(r, alive) {
   const tab = r.params.tab;
@@ -87,6 +103,7 @@ export async function enter(r, alive) {
   if (tab === 'general') {
     const s = A.settings;
     const tpl = { ...DEFAULT_TPL, ...s.mail_tpl };
+    const ok = { ...DEFAULT_OKTB, ...s.oktb };
     PREVIEW = null;
     el().className = 'stack';
     el().innerHTML = `<form id="genform" class="card"><div class="card-h"><h3>ตั้งค่าทั่วไป</h3></div><div class="card-b form">
@@ -109,7 +126,25 @@ export async function enter(r, alive) {
       </div></details>`).join('')}
       <div class="ferr" role="alert"></div>
       <div><button class="btn" type="submit">${icon('check')}บันทึกข้อความอีเมล</button></div>
-    </div></form>`;
+    </div></form>
+    <div class="card"><div class="card-h"><h3>เอกสาร OK TO BOARD</h3><span class="sub">หัวจดหมาย ลายเซ็น ตราประทับ และข้อความในจดหมาย · ใช้สร้างเอกสารที่ขั้นตอนที่ 4</span></div><div class="card-b stack">
+      <div class="brands" id="brands">${brandTiles()}</div>
+      <div class="muted s13">รูป PNG หรือ JPG ไม่เกิน 2 MB · ลายเซ็นและตราประทับใช้ไฟล์ PNG พื้นหลังโปร่งใสจะดูดีที่สุด · ตอนสร้างเอกสารเลือกได้ทุกครั้งว่าจะใส่หัวจดหมายและลายเซ็นหรือไม่</div>
+      <form id="oktbform" class="form">
+        <label class="f">ผู้ประสานงาน (P.I.C)<input name="pic_name" maxlength="120" value="${esc(ok.pic_name)}" placeholder="ชื่อที่ ตม. ติดต่อได้"></label>
+        <label class="f">เบอร์โทรผู้ประสานงาน<input name="pic_mobile" maxlength="60" inputmode="tel" value="${esc(ok.pic_mobile)}"></label>
+        <label class="f">ชื่อผู้ลงนาม<input name="signer_name" maxlength="120" value="${esc(ok.signer_name)}"></label>
+        <label class="f">ตำแหน่งผู้ลงนาม<input name="signer_title" maxlength="120" value="${esc(ok.signer_title)}"></label>
+        <label class="f">เรื่อง (Subject)<input name="subject" maxlength="200" value="${esc(ok.subject)}"></label>
+        <label class="f">บรรทัดท้ายจดหมาย<input name="footer" maxlength="200" value="${esc(ok.footer)}"></label>
+        ${[['intro', 'ย่อหน้าเปิดจดหมาย', 5], ['guarantee', 'ย่อหน้ารับรองและค่าใช้จ่าย', 9]].map(([k, l, rows]) => `<label class="f" style="grid-column:1 / -1">${l}<textarea name="${k}" rows="${rows}" maxlength="2000" spellcheck="false">${esc(ok[k])}</textarea></label>
+        <div class="row" style="grid-column:1 / -1"><button class="btn line sm" data-act="a-oktbreset" data-key="${k}" type="button">${icon('refresh')}คืนค่าเริ่มต้น</button></div>`).join('')}
+        <div class="tpl-vars" style="grid-column:1 / -1">${OKTB_VARS.map(([v, d]) => `<div><code>{{${v}}}</code><span>${d}</span></div>`).join('')}</div>
+        <div class="muted s13" style="grid-column:1 / -1">คำในวงเล็บปีกกาใช้ได้ในสองย่อหน้านี้ ระบบแทนค่าจากงานให้ · ย่อหน้าแรกของแต่ละช่องเยื้องบรรทัดแรกให้เอง · เว้นบรรทัดว่างเพื่อเว้นระยะระหว่างย่อหน้า · ดูผลจริงได้ที่ปุ่ม "ดูตัวอย่างหน้าแรก" ในขั้นตอนที่ 4</div>
+        <div class="ferr" role="alert" style="grid-column:1 / -1"></div>
+        <div style="grid-column:1 / -1"><button class="btn" type="submit">${icon('check')}บันทึกเอกสาร OK TO BOARD</button></div>
+      </form>
+    </div></div>`;
     loadPreview(alive);
     return;
   }
@@ -236,6 +271,47 @@ export const actions = {
     det.querySelector('textarea').value = DEFAULT_TPL[t.dataset.kind];
     showPreview(det);
     toast('คืนค่าเริ่มต้นแล้ว กด "บันทึกข้อความอีเมล" เพื่อใช้งาน');
+  },
+  'a-oktbreset'(t) {
+    document.getElementById('oktbform').elements[t.dataset.key].value = DEFAULT_OKTB[t.dataset.key];
+    toast('คืนค่าเริ่มต้นแล้ว กด "บันทึกเอกสาร OK TO BOARD" เพื่อใช้งาน');
+  },
+  async 'a-branddel'(t) {
+    const kind = t.dataset.kind, label = BRAND.find(b => b[0] === kind)[1];
+    if (!window.confirm(`ลบรูป${label} ?`)) return;
+    t.disabled = true;
+    try {
+      A.brand = (await api('DELETE', `/api/brand/${kind}`)).brand;
+      document.getElementById('brands').innerHTML = brandTiles();
+      toast(`ลบรูป${label}แล้ว`);
+    } catch (e) {
+      t.disabled = false;
+      t.closest('.brand').querySelector('.ferr').textContent = e.message;
+    }
+  }
+};
+
+export const changes = {
+  async 'a-brand'(t) {
+    const file = t.files && t.files[0], kind = t.dataset.kind, label = BRAND.find(b => b[0] === kind)[1];
+    t.value = '';
+    if (!file) return;
+    const tile = t.closest('.brand'), err = tile.querySelector('.ferr'), stat = tile.querySelector('.fstat');
+    err.textContent = '';
+    try {
+      const type = uploadType(file, ['image/png', 'image/jpeg']);
+      if (!type) throw new Error('รองรับเฉพาะไฟล์รูป PNG / JPG');
+      if (file.size > 2 * 1024 * 1024) throw new Error('รูปใหญ่เกิน 2 MB ย่อรูปแล้วอัปโหลดใหม่');
+      tile.classList.add('busy');
+      stat.textContent = 'กำลังอัปโหลด...';
+      A.brand = (await api('PUT', `/api/brand/${kind}`, new Blob([file], { type }))).brand;
+      document.getElementById('brands').innerHTML = brandTiles();
+      toast(`อัปโหลด${label}แล้ว`);
+    } catch (e) {
+      tile.classList.remove('busy');
+      stat.textContent = '';
+      err.textContent = e.message;
+    }
   }
 };
 
@@ -251,7 +327,7 @@ document.addEventListener('change', e => {
 
 document.addEventListener('submit', async e => {
   const f = e.target;
-  if (f.id !== 'cpform' && f.id !== 'genform' && f.id !== 'mailform') return;
+  if (!['cpform', 'genform', 'mailform', 'oktbform'].includes(f.id)) return;
   e.preventDefault();
   const err = f.querySelector('.ferr');
   err.textContent = '';
@@ -275,6 +351,10 @@ document.addEventListener('submit', async e => {
         throw new Error(`ข้อความ "${blank[1]}" ว่างอยู่ พิมพ์ข้อความหรือกดคืนค่าเริ่มต้นก่อนบันทึก`);
       }
       body = { mail_tpl: Object.fromEntries(MAIL_KINDS.map(([k]) => [k, f.elements[k].value])) };
+    } else if (f.id === 'oktbform') {
+      const o = Object.fromEntries(Object.keys(DEFAULT_OKTB).map(k => [k, f.elements[k].value]));
+      if (!o.intro.trim() || !o.guarantee.trim()) throw new Error('ย่อหน้าในจดหมายว่างอยู่ พิมพ์ข้อความหรือกดคืนค่าเริ่มต้นก่อนบันทึก');
+      body = { oktb: o };
     } else {
       const fd = new FormData(f);
       const lines = k => String(fd.get(k) || '').split('\n').map(s => s.trim()).filter(Boolean);
@@ -282,7 +362,7 @@ document.addEventListener('submit', async e => {
     }
     const r = await api('PUT', '/api/settings', body);
     A.settings = r.settings;
-    toast(f.id === 'mailform' ? 'บันทึกข้อความอีเมลแล้ว' : 'บันทึกการตั้งค่าแล้ว');
+    toast(f.id === 'mailform' ? 'บันทึกข้อความอีเมลแล้ว' : f.id === 'oktbform' ? 'บันทึกเอกสาร OK TO BOARD แล้ว' : 'บันทึกการตั้งค่าแล้ว');
   } catch (x) { err.textContent = x.message; }
   finally { btn.disabled = false; }
 });

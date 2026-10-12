@@ -10,7 +10,7 @@ import * as admin from './views/admin.js';
 import * as report from './views/report.js';
 
 export const A = {
-  me: null, settings: null, users: [], vehicles: [], hotels: [],
+  me: null, settings: null, users: [], vehicles: [], hotels: [], brand: {},
   route: { name: 'boot', params: {} },
   ui: {},
   actions: {},
@@ -78,13 +78,13 @@ export async function route() {
 
 export async function boot() {
   const d = await api('GET', '/api/me', undefined, { allow401: true });
-  Object.assign(A, { me: d.user, settings: d.settings, users: d.users, vehicles: d.vehicles, hotels: d.hotels });
+  Object.assign(A, { me: d.user, settings: d.settings, users: d.users, vehicles: d.vehicles, hotels: d.hotels, brand: d.brand || {} });
   document.getElementById('coname').textContent = d.settings.company.name.replace(/ Co\., Ltd\.$/, '');
 }
 
 export async function reloadRefs() {
   const d = await api('GET', '/api/me');
-  Object.assign(A, { me: d.user, settings: d.settings, users: d.users, vehicles: d.vehicles, hotels: d.hotels });
+  Object.assign(A, { me: d.user, settings: d.settings, users: d.users, vehicles: d.vehicles, hotels: d.hotels, brand: d.brand || {} });
 }
 
 function navItems() {
