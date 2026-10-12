@@ -1,4 +1,5 @@
 import { HttpError, json, readJson, randomId, sha256, now, str, text, ms, intOrNull, parseJson, bkk, bkkParts } from './util.js';
+import { documentNameEn } from '../public/js/core.js';
 import { login, logout, currentUser, sessionCookie, hashPassword, checkPasswordRules, publicUser, isOffice, seesAllCrew, requireUser, requireOffice, requireAdmin } from './auth.js';
 import { DEFAULTS, EDITABLE, loadSettings } from './settings.js';
 import { buildXlsx } from './xlsx.js';
@@ -50,6 +51,15 @@ async function route(req, env, url) {
   if (expectedUser && expectedUser !== String(u.id)) throw new HttpError(401, 'บัญชีในหน้าต่างนี้เปลี่ยนแล้ว กรุณาเข้าสู่ระบบใหม่');
 
   if (p === '/api/me' && m === 'GET') return json(await boot(env, u));
+  if (p === '/api/storage' && m === 'GET') {
+    requireOffice(u);
+    const settings = await loadSettings(env);
+    const row = await env.DB.prepare('SELECT COALESCE(SUM(size), 0) AS used FROM photos').first();
+    const usedBytes = row.used, limitBytes = settings.storage_gb * 1024 ** 3;
+    const warningPercent = settings.storage_warning_percent;
+    return json({ usedBytes, limitBytes, warningPercent, percent: Math.round(usedBytes / limitBytes * 10000) / 100,
+      level: usedBytes >= limitBytes ? 'full' : usedBytes * 100 >= limitBytes * warningPercent ? 'warning' : 'ok' });
+  }
   if (p === '/api/me/password' && m === 'POST') return changeOwnPassword(req, env, u);
   if (p === '/api/jobs' && m === 'GET') return listJobs(env, u, url);
   if (p === '/api/jobs' && m === 'POST') return createJob(req, env, u);
@@ -263,6 +273,10 @@ async function putSettings(req, env, u) {
 
 function validateSetting(k, v) {
   const def = DEFAULTS[k];
+  if (k === 'storage_warning_percent') {
+    if (!Number.isInteger(v) || v < 1 || v > 99) throw new HttpError(400, 'ตั้งค่าเตือนพื้นที่เป็นจำนวนเต็ม 1–99%');
+    return v;
+  }
   if (k === 'late_min') { const n = Number(v); if (!Number.isInteger(n) || n < 1 || n > 240) throw new HttpError(400, 'เวลาช้ากว่าแผนต้องอยู่ระหว่าง 1–240 นาที'); return n; }
   if (k === 'cp_on_chain' || k === 'cp_off_chain') { const n = Number(v); if (!Number.isInteger(n) || n < 0 || n > 30) throw new HttpError(400, 'ค่าไม่ถูกต้อง'); return n; }
   if (k === 'company') {
@@ -830,7 +844,7 @@ async function exportJob(env, u, id) {
     ['Status', j.status === 'closed' ? 'Closed ' + bkk(j.closed_at) : 'Open'],
     ['Exported', bkk(now()) + ' (Bangkok time)']
   ];
-  const crewSheet = [['No.', 'Name', 'Rank', 'Type', 'Nationality', 'Flight', 'Passport', 'Vehicle', 'Driver', 'Hotel', 'Room', 'Boarding agent', ...settings.docs.map(d => 'Doc: ' + d)],
+  const crewSheet = [['No.', 'Name', 'Rank', 'Type', 'Nationality', 'Flight', 'Passport', 'Vehicle', 'Driver', 'Hotel', 'Room', 'Boarding agent', ...settings.docs.map(d => 'Doc: ' + documentNameEn(d))],
     ...crew.map((c, i) => { const v = veh.get(c.vehicle_id); return [i + 1, c.name, c.rank, c.type === 'on' ? 'On signer' : 'Off signer', c.nationality, c.flight, c.passport, v ? `${v.name} ${v.plate}` : '', v ? v.driver : '', hot.get(c.hotel_id) || '', c.room, uName.get(c.agent_id) || '', ...settings.docs.map(d => (c.docs[d] ? 'Yes' : 'No'))]; })];
   const log = [['Name', 'Rank', 'Type', 'Checkpoint', 'Checkpoint (EN)', 'Plan', 'Actual', 'Diff (min)', 'Result', 'Confirmed by'],
     ...crew.flatMap(c => c.cps.map(x => { const d = x.actual != null && x.plan != null ? Math.round((x.actual - x.plan) / 60000) : ''; return [c.name, c.rank, c.type === 'on' ? 'On signer' : 'Off signer', x.name, x.name_en, bkk(x.plan), bkk(x.actual), d, x.actual == null ? '' : d !== '' && d > late ? 'Late' : 'On time', uName.get(x.by) || '']; }))];

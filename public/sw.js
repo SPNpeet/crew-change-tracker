@@ -1,5 +1,5 @@
-const CACHE = 'cct-shell-v3';
-const SHELL = ['/', '/app.css', '/app2.css', '/fonts/fonts.css', '/js/app.js', '/js/api.js', '/js/core.js', '/js/ui.js',
+const CACHE = 'cct-shell-v4';
+const SHELL = ['/', '/app.css', '/app2.css', '/fonts/fonts.css', '/js/app.js', '/js/api.js', '/js/core.js', '/js/ui.js', '/js/storage.js',
   '/js/views/auth.js', '/js/views/jobs.js', '/js/views/office.js', '/js/views/field.js', '/js/views/owner.js', '/js/views/admin.js', '/js/views/report.js',
   '/icons/icon-192.png'];
 

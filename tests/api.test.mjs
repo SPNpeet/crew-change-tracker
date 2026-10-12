@@ -323,6 +323,8 @@ test('excel exports are valid xlsx files', async () => {
   const txt = Buffer.from(r.data).toString('utf8');
   assert.ok(txt.includes('xl/worksheets/sheet3.xml'));
   assert.ok(txt.includes('Rafael Mendoza'));
+  assert.ok(txt.includes('Crew change summary') && txt.includes('Checkpoint (EN)') && txt.includes('Landed'));
+  assert.ok(txt.includes('Doc: Flight ticket') && !txt.includes('Doc: ตั๋วเครื่องบิน'), 'built-in document heading is English without changing stored document keys');
   r = await office('GET', '/api/export/all.xlsx');
   assert.equal(r.status, 200);
   assert.equal((await field('GET', `/api/jobs/${S.job}/export.xlsx`)).status, 403);

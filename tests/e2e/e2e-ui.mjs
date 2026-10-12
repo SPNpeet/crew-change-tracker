@@ -13,7 +13,11 @@ const waitFor = async (sel, i = 0) => { for (let k = 0; k < 50; k++) { if (await
 const eventually = async (fn, ms = 8000) => { const end = Date.now() + ms; while (Date.now() < end) { try { if (await fn()) return true; } catch (e) {} await sleep(250); } return false; };
 const click = async (sel, i = 0, wait = 700) => { await waitFor(sel, i); const found = await b.eval(`(() => { const e = ${$(sel, i)}; if (!e) return false; e.click(); return true; })()`); if (!found) results.push('FAIL missing ' + sel); await sleep(wait); return found; };
 const setVal = async (sel, v, i = 0) => (await waitFor(sel, i)) && b.eval(`(() => { const e = ${$(sel, i)}; e.value = ${JSON.stringify(v)}; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-const submit = async sel => { await b.eval(`${$(sel)}.requestSubmit()`); await sleep(900); };
+const submit = async sel => {
+  await b.eval(`window.submittedFixtureForm=${$(sel)};window.submittedFixtureForm.requestSubmit()`);
+  const settled = await eventually(() => b.eval(`!window.submittedFixtureForm.isConnected || !window.submittedFixtureForm.querySelector('[type=submit]')?.disabled`));
+  if (!settled) results.push('FAIL submit did not settle: ' + sel);
+};
 const text = sel => b.eval(`(${$(sel)} || {}).textContent || ''`);
 
 await b.size(1280, 900);

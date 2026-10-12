@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { esc, fmtFull, mail, DEFAULT_TPL } from '../core.js';
 import { icon, toast, openDialog, dlgHead, dlgFoot } from '../ui.js';
 import { roleLabel } from './auth.js';
+import { storageCard } from '../storage.js';
 
 const app = () => document.getElementById('app');
 const TABS = [['users', 'ผู้ใช้งาน'], ['vehicles', 'รถและคนขับ'], ['hotels', 'โรงแรม'], ['points', 'จุดสถานะ'], ['general', 'ตั้งค่าทั่วไป'], ['backup', 'สำรองข้อมูล']];
@@ -86,15 +87,17 @@ export async function enter(r, alive) {
   }
   if (tab === 'general') {
     const s = A.settings;
+    const storage = await api('GET', '/api/storage').catch(() => null);
+    if (!alive()) return;
     const tpl = { ...DEFAULT_TPL, ...s.mail_tpl };
     PREVIEW = null;
     el().className = 'stack';
-    el().innerHTML = `<form id="genform" class="card"><div class="card-h"><h3>ตั้งค่าทั่วไป</h3></div><div class="card-b form">
+    el().innerHTML = `${storageCard(storage)}<form id="genform" class="card"><div class="card-h"><h3>ตั้งค่าทั่วไป</h3></div><div class="card-b form">
       <label class="f">ชื่อบริษัท (ไทย)<input name="name_th" value="${esc(s.company.name_th)}" maxlength="120"></label>
       <label class="f">ชื่อบริษัท (อังกฤษ)<input name="name" value="${esc(s.company.name)}" maxlength="120"></label>
       <label class="f" style="grid-column:1 / -1">ลายเซ็นท้ายอีเมล<textarea name="signature" rows="3" maxlength="400">${esc(s.company.signature)}</textarea></label>
       <label class="f">ถือว่า "ช้ากว่าแผน" เมื่อเกิน (นาที)<input name="late_min" type="number" min="1" max="240" value="${s.late_min}" required></label>
-      <div></div>
+      <label class="f">เตือนเมื่อใช้พื้นที่รูปถึง (%)<input name="storage_warning_percent" type="number" min="1" max="99" value="${s.storage_warning_percent}" required><span class="fhelp">ค่าเริ่มต้น 80% ผู้ดูแลปรับได้ 1–99% เป็นจุดแจ้งเตือน ไม่เปลี่ยนโควตาพื้นที่หรือราคา</span></label>
       <label class="f">เอกสารที่ต้องมีต่อคน (บรรทัดละ 1 รายการ)<textarea name="docs" rows="5">${esc(s.docs.join('\n'))}</textarea></label>
       <label class="f">เรื่องที่ได้รับแต่งตั้ง (บรรทัดละ 1 รายการ)<textarea name="services" rows="5">${esc(s.services.join('\n'))}</textarea></label>
       <div class="ferr" role="alert" style="grid-column:1 / -1"></div>
@@ -278,11 +281,15 @@ document.addEventListener('submit', async e => {
     } else {
       const fd = new FormData(f);
       const lines = k => String(fd.get(k) || '').split('\n').map(s => s.trim()).filter(Boolean);
-      body = { company: { name: fd.get('name'), name_th: fd.get('name_th'), signature: fd.get('signature') }, late_min: +fd.get('late_min'), docs: lines('docs'), services: lines('services') };
+      body = { company: { name: fd.get('name'), name_th: fd.get('name_th'), signature: fd.get('signature') }, late_min: +fd.get('late_min'), storage_warning_percent: +fd.get('storage_warning_percent'), docs: lines('docs'), services: lines('services') };
     }
     const r = await api('PUT', '/api/settings', body);
     A.settings = r.settings;
     if (f.id === 'mailform') f.mailExpected = structuredClone(r.settings.mail_tpl);
+    if (f.id === 'genform') {
+      const storage = await api('GET', '/api/storage').catch(() => null);
+      if (f.isConnected) document.querySelector('.storage-status')?.replaceWith(document.createRange().createContextualFragment(storageCard(storage)));
+    }
     toast(f.id === 'mailform' ? 'บันทึกข้อความอีเมลแล้ว' : 'บันทึกการตั้งค่าแล้ว');
   } catch (x) { err.textContent = x.message; }
   finally { btn.disabled = false; }

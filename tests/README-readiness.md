@@ -18,14 +18,21 @@ script with its synthetic ADMIN_USER / ADMIN_PASS and BASE configuration:
   immediate photo rejection, seven email templates/conflict, escaping, pagination.
 - `npm run test:e2e:privacy`: retry, save-copy/discard, logout/cache/cross-tab privacy.
 - `npm run test:e2e:offline`: an already-open session queues a checkpoint and syncs.
+- `npm run test:e2e:report`: English report/PDF/Excel, preserved entered text,
+  Bangkok year boundaries, two-page A4 fixture, empty/closed jobs and role access.
+- `npm run test:e2e:onboarding`: start with an admin-only, unseeded local database;
+  checks form hints, the setup guide, active resources and storage warning UI.
+  High-usage/error UI states are mocked; RD19-RD20 exercise the actual API.
 - `npm run test:e2e:audit`: layout heuristics at six viewport widths; warnings need
   visual review. Emulation does not exercise real camera/GPS permissions or Safari.
 
-Readiness RD01-RD18 cover simultaneous setup, role privacy, invalid settings,
+Readiness RD01-RD20 cover simultaneous setup, role privacy, invalid settings,
 closed-job protection, inactive assignments, confirm retries, GPS bounds,
 account-cap concurrency, session invalidation, backup/export permissions,
 photo limits/ACLs, Owner rotation, deletion, >200 jobs, email write conflicts,
-generic authentication errors and the Owner closure expiry boundary.
+generic authentication errors, the Owner closure expiry boundary, storage usage
+permissions, configurable warning boundaries and unchanged capacity limits.
+The API run has 44 checks including the original suite and BK01.
 
 BK01 injects a write between independently awaited table reads using real SQLite.
 The backup must remain relationally consistent; D1 `batch()` runs the reads as

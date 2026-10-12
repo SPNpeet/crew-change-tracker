@@ -14,6 +14,8 @@
     "test:e2e:offline": "node tests/e2e/offline.mjs",
     "test:e2e:readiness": "node tests/e2e/navigation-readiness.mjs",
     "test:e2e:privacy": "node tests/e2e/privacy-retry.mjs",
+    "test:e2e:report": "node tests/e2e/report-english.mjs",
+    "test:e2e:onboarding": "node tests/e2e/onboarding-storage.mjs",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

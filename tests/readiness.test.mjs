@@ -158,3 +158,34 @@ test('RD18 Owner access expires 30 days after closure and reopening restores cur
  finally{ok(await office('PATCH','/api/jobs/'+S.job,{status:'open'}));}
  assert.equal((await anon('GET','/api/public/'+token)).status,200);
 });
+
+test('RD19 storage usage is office-only and only admins can configure the warning threshold',async()=>{
+ assert.equal((await anon('GET','/api/storage')).status,401);
+ assert.equal((await field('GET','/api/storage')).status,403);
+ const usage=ok(await admin('GET','/api/storage'));
+ assert.deepEqual(ok(await office('GET','/api/storage')),usage);
+ assert.equal(usage.limitBytes,10*1024**3);assert.equal(usage.warningPercent,80);
+ assert.equal(usage.usedBytes,readFileSync(new URL('./e2e/photo.jpg',import.meta.url)).length);
+ assert.equal(usage.level,'ok');
+ assert.equal((await office('PUT','/api/settings',{storage_warning_percent:75})).status,403);
+ for(const value of [0,100,80.5,null,true,'80'])assert.equal((await admin('PUT','/api/settings',{storage_warning_percent:value})).status,400);
+ assert.equal(ok(await admin('GET','/api/storage')).warningPercent,80);
+ ok(await admin('PUT','/api/settings',{storage_warning_percent:75,storage_gb:999}));
+ const changed=ok(await admin('GET','/api/storage'));assert.equal(changed.warningPercent,75);assert.equal(changed.limitBytes,usage.limitBytes);
+ ok(await admin('PUT','/api/settings',{storage_warning_percent:80}));
+});
+
+test('RD20 storage warnings cross the configured boundary and recover after photo deletion',async()=>{
+ const originalSize=readFileSync(new URL('./e2e/photo.jpg',import.meta.url)).length;
+ const limit=10*1024**3,threshold=limit*0.8;
+ // Change only the isolated fixture's byte-count metadata; never allocate GB of files.
+ const setSize=bytes=>execFileSync(process.execPath,[wr,'d1','execute','cct','--local','--persist-to',persist,'--command',`UPDATE photos SET size=${bytes} WHERE id=${S.photo}`],{stdio:'ignore',windowsHide:true});
+ try{
+  setSize(threshold-1);assert.equal(ok(await office('GET','/api/storage')).level,'ok');
+  setSize(threshold);const near=ok(await office('GET','/api/storage'));assert.equal(near.level,'warning');assert.equal(near.percent,80);
+  ok(await admin('PUT','/api/settings',{storage_warning_percent:90}));assert.equal(ok(await office('GET','/api/storage')).level,'ok');
+  setSize(limit);assert.equal(ok(await office('GET','/api/storage')).level,'full');
+ }finally{setSize(originalSize);ok(await admin('PUT','/api/settings',{storage_warning_percent:80}));}
+ assert.equal(ok(await office('GET','/api/storage')).level,'ok');
+ ok(await field('DELETE','/api/photos/'+S.photo));assert.equal(ok(await office('GET','/api/storage')).usedBytes,0);
+});

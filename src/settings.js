@@ -10,6 +10,7 @@ export const DEFAULTS = {
   late_min: 10,
   max_users: 15,
   storage_gb: 10,
+  storage_warning_percent: 80,
   docs: ['Passport', 'Seaman book', 'ตั๋วเครื่องบิน'],
   services: ['Crew change', 'Husbandry', 'Spare parts', 'Provision', 'Medical'],
   cp_on: [
