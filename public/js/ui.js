@@ -67,6 +67,7 @@ export function openDialog(html, onSubmit) {
   const opener = lastTrigger;
   dlg.addEventListener('close', () => { if (opener && opener.isConnected && !dlg.open) opener.focus(); }, { once: true });
   dlg.innerHTML = html;
+  dlg.setAttribute('aria-labelledby', 'dlg-title');
   const form = dlg.querySelector('form');
   const close = () => { if (dlg.open) dlg.close(); };
   dlg.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
@@ -91,7 +92,7 @@ export function openDialog(html, onSubmit) {
   return dlg;
 }
 
-export const dlgHead = t => `<div class="dlg-h"><h3>${esc(t)}</h3><button type="button" class="iconbtn plain" data-close aria-label="ปิด" title="ปิด">${icon('x')}</button></div>`;
+export const dlgHead = t => `<div class="dlg-h"><h3 id="dlg-title">${esc(t)}</h3><button type="button" class="iconbtn plain" data-close aria-label="ปิด" title="ปิด">${icon('x')}</button></div>`;
 export const dlgFoot = (label = 'บันทึก') => `<div class="ferr" role="alert"></div><div class="dlg-f"><button type="button" class="btn line" data-close>ยกเลิก</button><button type="submit" class="btn">${esc(label)}</button></div>`;
 
 export function saveFile(bytes, name, type) {
