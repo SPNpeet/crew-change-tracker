@@ -13,7 +13,7 @@ const count = async () => (await read('/api/field')).crew.find(c => c.id === cre
 const pending = () => b.eval(`JSON.parse(localStorage.getItem('cct-outbox-v1') || '[]')`);
 const blobCount = () => b.eval(`new Promise((resolve,reject)=>{const r=indexedDB.open('cct-photos',1);r.onupgradeneeded=()=>r.result.createObjectStore('blobs');r.onerror=()=>reject(r.error);r.onsuccess=()=>{const db=r.result,tx=db.transaction('blobs'),q=tx.objectStore('blobs').count();tx.oncomplete=()=>{db.close();resolve(q.result)}}})`);
 const bytes = `Uint8Array.from(atob(${JSON.stringify(photo().toString('base64'))}), c => c.charCodeAt(0))`;
-const queuePhoto = label => b.eval(`(async()=>{const a=await import('/js/api.js');return a.uploadPhoto(${crew.id},new Blob([${bytes}],{type:'image/jpeg'}),{point:${JSON.stringify(label)},label:${JSON.stringify(label)}},${uid})})()`);
+const queuePhoto = label => b.eval(`(async()=>{const a=await import('/js/api.js');return a.uploadPhoto(${crew.id},new Blob([${bytes}],{type:'image/jpeg'}),{point:${JSON.stringify(label)},label:${JSON.stringify(label)},assignment_revision:${crew.assignment_rev}},${uid})})()`);
 const flush = () => b.eval(`(async()=>{const a=await import('/js/api.js');return a.flushOutbox(${uid})})()`);
 const blockUploads = () => b.eval(`window.originalFetch=window.fetch;window.fetch=(url,opts)=>String(url).includes('/photos?')?Promise.resolve(new Response(JSON.stringify({error:'Synthetic temporary upload outage'}),{status:503,headers:{'content-type':'application/json'}})):window.originalFetch(url,opts)`);
 const unblock = () => b.eval(`if(window.originalFetch){window.fetch=window.originalFetch;delete window.originalFetch}`);
@@ -117,9 +117,13 @@ try {
   await check('logout clears another open tab and waits for its in-flight upload', async () => {
     const tab=await anotherTab();
     try {
-      await new Promise(r=>setTimeout(r,700));
-      await tab.eval(`window.originalFetch=window.fetch;window.releaseUpload=null;window.fetch=(url,opts)=>String(url).includes('/photos?')?new Promise(resolve=>{window.releaseUpload=()=>{const failure=()=>new Response(JSON.stringify({error:'Synthetic outage'}),{status:503,headers:{'content-type':'application/json'}});window.fetch=(url,opts)=>String(url).includes('/photos?')?Promise.resolve(failure()):window.originalFetch(url,opts);resolve(failure())}}):window.originalFetch(url,opts);window.uploadDone=import('/js/api.js').then(a=>a.uploadPhoto(${crew.id},new Blob([${bytes}],{type:'image/jpeg'}),{point:'cross-tab',label:'cross-tab'},${uid}));true`);
-      for(let i=0;i<50 && !await tab.eval(`!!window.releaseUpload`);i++) await new Promise(r=>setTimeout(r,50));
+      // Establish a loaded second tab before intercepting; a late navigation would discard the interceptor.
+      for(let i=0;i<100&&!await tab.eval(`!!document.querySelector('.fieldpage')`);i++)await new Promise(r=>setTimeout(r,100));
+      assert.equal(await tab.eval(`!!document.querySelector('.fieldpage')`),true,'second tab must finish its authenticated field navigation');
+      await tab.eval(`window.originalFetch=window.fetch;window.releaseUpload=null;window.fetch=(url,opts)=>String(url).includes('/photos?')?new Promise(resolve=>{window.releaseUpload=()=>{const failure=()=>new Response(JSON.stringify({error:'Synthetic outage'}),{status:503,headers:{'content-type':'application/json'}});window.fetch=(url,opts)=>String(url).includes('/photos?')?Promise.resolve(failure()):window.originalFetch(url,opts);resolve(failure())}}):window.originalFetch(url,opts);window.uploadDone=import('/js/api.js').then(a=>a.uploadPhoto(${crew.id},new Blob([${bytes}],{type:'image/jpeg'}),{point:'cross-tab',label:'cross-tab',assignment_revision:${crew.assignment_rev}},${uid}));true`);
+      for(let i=0;i<100 && !await tab.eval(`!!window.releaseUpload`);i++) await new Promise(r=>setTimeout(r,50));
+      assert.equal(await tab.eval(`!!window.releaseUpload`),true,'second tab upload must be intercepted before logout');
+      assert.equal(await tab.eval(`navigator.locks.query().then(s=>s.held.some(l=>l.name==='cct-device-work'))`),true,'upload must hold the cross-tab device lock');
       await blockUploads(); await account();
       await b.eval(`document.querySelector('[data-act="logout"]').click()`);
       await new Promise(r=>setTimeout(r,200));

@@ -1,22 +1,26 @@
+import {migrateLocal} from './local-migrations.mjs';
+import {checkpointBody,assignmentPath} from './checkpoint-client.mjs';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { png, pdf } from './gen.mjs';
+import { png, pdf, sheetRows } from './gen.mjs';
 
-const PORT = 8931;
+const PORT = Number(process.env.CCT_API_PORT || 8931);
 const BASE = `http://127.0.0.1:${PORT}`;
 const KEY = 'test-setup-key';
 const persist = mkdtempSync(join(tmpdir(), 'cct-test-'));
-const WR = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const WR = join(process.cwd(), 'node_modules/wrangler/bin/wrangler.js');
 let server;
 
 function client() {
   let cookie = '';
   return async function call(method, path, body, extra = {}) {
+    body = await checkpointBody(BASE, cookie, path, body, method);
+    path=await assignmentPath(BASE,cookie,path,method);
     const headers = { 'x-cct': '1', ...(extra.headers || {}) };
     if (cookie) headers.cookie = cookie;
     let payload = body;
@@ -32,8 +36,8 @@ function client() {
 
 before(async () => {
   try { await fetch(BASE + '/'); throw new Error(`port ${PORT} is already in use by another program`); } catch (e) { if (String(e.message).includes('already in use')) throw e; }
-  execFileSync(WR, ['wrangler', 'd1', 'migrations', 'apply', 'cct', '--local', '--persist-to', persist], { stdio: 'ignore', shell: process.platform === 'win32' });
-  server = spawn(WR, ['wrangler', 'dev', '--local', '--port', String(PORT), '--persist-to', persist, '--var', `SETUP_KEY:${KEY}`, '--var', `CRON_NOW:${Date.UTC(2026, 8, 30, 19, 0)}`, '--test-scheduled'], { stdio: 'ignore', shell: process.platform === 'win32' });
+  migrateLocal(persist);
+  server = spawn(process.execPath, [WR, 'dev', '--local', '--port', String(PORT), '--persist-to', persist, '--var', `SETUP_KEY:${KEY}`, '--var', `CRON_NOW:${Date.UTC(2026, 8, 30, 19, 0)}`, '--test-scheduled'], { stdio: 'ignore', windowsHide: true });
   for (let i = 0; i < 90; i++) {
     try { if ((await fetch(BASE + '/api/health')).ok) return; } catch (e) {}
     await new Promise(r => setTimeout(r, 1000));
@@ -46,7 +50,7 @@ after(() => {
     if (process.platform === 'win32') { try { execFileSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' }); } catch (e) {} }
     else server.kill('SIGTERM');
   }
-  try { rmSync(persist, { recursive: true, force: true }); } catch (e) {}
+  console.log('Synthetic state and migration diagnostics retained at '+persist);
 });
 
 const admin = client();
@@ -132,6 +136,9 @@ test('field staff cannot use office or admin functions', async () => {
   list = (await admin('GET', '/api/users')).data.users;
   assert.equal(list.find(x => x.id === S.wichai).emp_code, '');
   assert.equal((await office('PATCH', `/api/users/${S.wichai}`, { emp_code: 'X' })).status, 403);
+  const [head, ...rows] = sheetRows((await admin('GET', '/api/export/all.xlsx')).data, 5);
+  const col = head.indexOf('Employee code'), who = head.indexOf('Username');
+  assert.equal(rows.find(x => x[who] === 'somsak')[col], 'HR02', 'whole-system Excel shows the employee code');
 });
 
 test('office runs a job through the 9 steps', async () => {
@@ -635,11 +642,11 @@ test('nightly backup restores into an empty database with identical data', async
   const dir = mkdtempSync(join(tmpdir(), 'cct-restore-'));
   const gz = join(dir, 'b.json.gz'), sql = join(dir, 'r.sql'), db = join(dir, 'db');
   writeFileSync(gz, f.data);
-  const sh = { stdio: 'pipe', shell: process.platform === 'win32' };
-  execFileSync('node', ['scripts/backup-to-sql.mjs', gz, sql], sh);
-  execFileSync(WR, ['wrangler', 'd1', 'migrations', 'apply', 'cct', '--local', '--persist-to', db], sh);
-  execFileSync(WR, ['wrangler', 'd1', 'execute', 'cct', '--local', '--persist-to', db, '--file', sql], sh);
-  const count = where => { const out = execFileSync(WR, ['wrangler', 'd1', 'execute', 'cct', '--local', '--persist-to', where, '--json', '--command', `"SELECT (SELECT COUNT(*) FROM users) u, (SELECT COUNT(*) FROM jobs) j, (SELECT COUNT(*) FROM crew) c, (SELECT COUNT(*) FROM checkpoints) k, (SELECT COUNT(*) FROM notes) n, (SELECT COUNT(*) FROM photos) p, (SELECT COUNT(*) FROM activity) a, (SELECT SUM(actual_at) FROM checkpoints) s, (SELECT COUNT(*) FROM crew_files) f, (SELECT SUM(size) FROM crew_files) fs, (SELECT COUNT(*) FROM crew WHERE LENGTH(passport_exp) = 10 AND LENGTH(sirb_exp) = 10) x, (SELECT COUNT(*) FROM jobs WHERE LENGTH(oktb) > 2) o"`], sh).toString(); return JSON.parse(out.slice(out.indexOf('[')))[0].results[0]; };
+  const sh = { stdio: 'pipe', windowsHide: true };
+  execFileSync(process.execPath, ['scripts/backup-to-sql.mjs', gz, sql], sh);
+  execFileSync(process.execPath, [WR, 'd1', 'migrations', 'apply', 'cct', '--local', '--persist-to', db], sh);
+  execFileSync(process.execPath, [WR, 'd1', 'execute', 'cct', '--local', '--persist-to', db, '--file', sql], sh);
+  const count = where => { const out = execFileSync(process.execPath, [WR, 'd1', 'execute', 'cct', '--local', '--persist-to', where, '--json', '--command', `SELECT (SELECT COUNT(*) FROM users) u, (SELECT COUNT(*) FROM jobs) j, (SELECT COUNT(*) FROM crew) c, (SELECT COUNT(*) FROM checkpoints) k, (SELECT COUNT(*) FROM notes) n, (SELECT COUNT(*) FROM photos) p, (SELECT COUNT(*) FROM activity) a, (SELECT SUM(actual_at) FROM checkpoints) s, (SELECT COUNT(*) FROM crew_files) f, (SELECT SUM(size) FROM crew_files) fs, (SELECT COUNT(*) FROM crew WHERE LENGTH(passport_exp) = 10 AND LENGTH(sirb_exp) = 10) x, (SELECT COUNT(*) FROM jobs WHERE LENGTH(oktb) > 2) o`], sh).toString(); return JSON.parse(out.slice(out.indexOf('[')))[0].results[0]; };
   const restored = count(db);
   const live = JSON.parse(Buffer.from(gunzipSync(f.data)).toString('utf8')).tables;
   assert.equal(restored.u, live.users.length);
@@ -662,12 +669,12 @@ test('nightly backup restores into an empty database with identical data', async
   old.tables.jobs = live.jobs.map(({ oktb, ...r }) => r);
   const oldJson = join(dir, 'old.json'), oldSql = join(dir, 'old.sql');
   writeFileSync(oldJson, JSON.stringify(old));
-  execFileSync('node', ['scripts/backup-to-sql.mjs', oldJson, oldSql], sh);
-  execFileSync(WR, ['wrangler', 'd1', 'execute', 'cct', '--local', '--persist-to', db, '--file', oldSql], sh);
+  execFileSync(process.execPath, ['scripts/backup-to-sql.mjs', oldJson, oldSql], sh);
+  execFileSync(process.execPath, [WR, 'd1', 'execute', 'cct', '--local', '--persist-to', db, '--file', oldSql], sh);
   const before = count(db);
   assert.deepEqual([before.u, before.c, before.k, before.a, before.s], [restored.u, restored.c, restored.k, restored.a, restored.s], 'a backup made before this version still restores');
   assert.deepEqual([before.f, before.x, before.o], [0, 0, 0]);
-  rmSync(dir, { recursive: true, force: true });
+  console.log('Synthetic restore evidence retained at '+dir);
 });
 
 test('password change signs out other sessions', async () => {

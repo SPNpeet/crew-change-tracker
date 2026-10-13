@@ -17,7 +17,9 @@
     "test:e2e:privacy": "node tests/e2e/privacy-retry.mjs",
     "test:e2e:report": "node tests/e2e/report-english.mjs",
     "test:e2e:onboarding": "node tests/e2e/onboarding-storage.mjs",
-    "deploy": "wrangler deploy"
+    "test:e2e:evidence": "node tests/e2e/field-evidence.mjs",
+    "deploy": "wrangler deploy",
+    "test:e2e:packets": "node tests/e2e/packet-workflow.mjs"
   },
   "devDependencies": {
     "wrangler": "4.130.0"

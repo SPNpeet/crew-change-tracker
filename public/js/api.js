@@ -75,15 +75,21 @@ function blobs(mode, fn) {
     };
   });
 }
-const confirmBody = it => ({ idx: it.idx, at: it.at, lat: it.lat, lng: it.lng, sent_at: Date.now() });
+const confirmBody = it => ({ assignment_revision: it.assignment_revision, cp_id: it.cp_id, idx: it.idx, at: it.at, lat: it.lat, lng: it.lng, sent_at: Date.now(), ...(it.upload ? { upload_id: it.upload } : {}), ...(it.skip ? { skip_reason: it.skip } : {}) });
 function photoPath(it) {
   const q = new URLSearchParams({ upload_id: it.photo, point: it.point, at: it.at, sent_at: Date.now() });
   if (it.lat != null) { q.set('lat', it.lat); q.set('lng', it.lng); }
+  if (it.cp != null) q.set('cp_idx', it.cp);
+  if (it.assignment_revision != null) q.set('assignment_revision',it.assignment_revision);
+  if (it.cp_id != null) q.set('cp_id', it.cp_id);
+  if (it.acc != null) q.set('acc', it.acc);
+  if (it.gps) q.set('gps', it.gps);
   return `/api/crew/${it.crew}/photos?${q}`;
 }
+// extra.at is the capture time of the photo taken with this point; extra.upload its upload id; extra.skip the reason for no photo.
 export function confirmPoint(crewId, idx, extra, uid) {
   return deviceTask(async () => {
-    const item = { uid, crew: crewId, idx, at: Date.now(), lat: extra.lat, lng: extra.lng, label: extra.label };
+    const item = { uid, crew: crewId, assignment_revision: extra.assignment_revision, cp_id: extra.cp_id, idx, at: extra.at || Date.now(), lat: extra.lat, lng: extra.lng, label: extra.label, upload: extra.upload, skip: extra.skip };
     try { return await api('POST', `/api/crew/${crewId}/confirm`, confirmBody(item), { userId: uid, allow401: true }); }
     catch (e) {
       if (!keep(e.status)) throw e;
@@ -93,7 +99,7 @@ export function confirmPoint(crewId, idx, extra, uid) {
   });
 }
 async function upload(crewId, blob, extra, uid) {
-  const item = { uid, crew: crewId, photo: extra.uploadId || crypto.randomUUID(), point: extra.point, lat: extra.lat, lng: extra.lng, at: extra.at || Date.now(), label: extra.label };
+  const item = { uid, crew: crewId, assignment_revision: extra.assignment_revision, photo: extra.uploadId || crypto.randomUUID(), point: extra.point, cp: extra.cp, cp_id: extra.cp_id, lat: extra.lat, lng: extra.lng, acc: extra.acc, gps: extra.gps, at: extra.at || Date.now(), label: extra.label };
   try { return await api('POST', photoPath(item), blob, { userId: uid, allow401: true }); }
   catch (e) {
     // Camera captures may not exist in the device gallery. Preserve even a
@@ -109,7 +115,7 @@ const selections = new Map();
 export function prepareAndUploadPhoto(crewId, file, extra, prepare, uid) {
   return deviceTask(async () => {
     const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()))].map(x => x.toString(16).padStart(2, '0')).join('');
-    const key = `${uid}:${crewId}:${extra.point}:${hash}`;
+    const key = `${uid}:${crewId}:${extra.assignment_revision}:${extra.cp_id ?? "unlinked"}:${extra.point}:${hash}`;
     let selected = selections.get(key);
     if (selected?.result) return { ...selected.result, repeated: true };
     if (!selected) {
@@ -119,8 +125,8 @@ export function prepareAndUploadPhoto(crewId, file, extra, prepare, uid) {
     }
     if (!selected.prepared) selected.prepared = await prepare();
     const out = selected.prepared;
-    const result = await upload(crewId, out.blob, { ...extra, uploadId: selected.uploadId, at: selected.at, lat: out.gps?.lat.toFixed(6), lng: out.gps?.lng.toFixed(6) }, uid);
-    selected.result = { ...result, gps: !!out.gps };
+    const result = await upload(crewId, out.blob, { ...extra, uploadId: selected.uploadId, at: selected.at, lat: out.gps?.lat.toFixed(6), lng: out.gps?.lng.toFixed(6), acc: out.gps && Number.isFinite(out.gps.acc) ? Math.round(out.gps.acc) : undefined, gps: out.fix?.status }, uid);
+    selected.result = { ...result, gps: !!out.gps, at: selected.at, uploadId: selected.uploadId, lat: out.gps?.lat, lng: out.gps?.lng };
     delete selected.prepared;
     return selected.result;
   });

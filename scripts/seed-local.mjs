@@ -1,11 +1,16 @@
+import {checkpointBody,assignmentPath} from '../tests/checkpoint-client.mjs';
+import { readFileSync } from 'node:fs';
+
 const BASE = process.env.BASE || 'http://127.0.0.1:8787';
 if (!/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(BASE)) throw new Error('seed-local only runs against a local dev server');
 const [user, pass] = [process.env.ADMIN_USER || 'somying', process.env.ADMIN_PASS];
 if (!pass) throw new Error('set ADMIN_PASS');
 
 let cookie = '';
-async function call(method, path, body) {
-  const res = await fetch(BASE + path, { method, headers: { 'x-cct': '1', 'content-type': 'application/json', cookie }, body: body === undefined ? undefined : JSON.stringify(body) });
+async function call(method, path, body, type = 'application/json') {
+  if (!(body instanceof Uint8Array)) body = await checkpointBody(BASE,cookie,path,body,method);
+  path=await assignmentPath(BASE,cookie,path,method);
+  const res = await fetch(BASE + path, { method, headers: { 'x-cct': '1', 'content-type': type, cookie }, body: body === undefined ? undefined : body instanceof Uint8Array ? body : JSON.stringify(body) });
   const set = res.headers.get('set-cookie');
   if (set) cookie = set.split(';')[0];
   const data = await res.json().catch(() => ({}));
@@ -21,7 +26,9 @@ const somsak = await mk({ username: 'somsak', name: 'สมศักดิ์', 
 const wichai = await mk({ username: 'wichai', name: 'วิชัย', role: 'field', title: 'Boarding agent · ท่าเรือ', phone: '081-000-1002', id_card: '3-1002-00000-00-2' });
 await mk({ username: 'napa', name: 'นภา', role: 'field', see_all: true, title: 'หัวหน้างานภาคสนาม' });
 await mk({ username: 'pranee', name: 'ปราณี', role: 'office', title: 'Operation', emp_code: 'OP01' });
-const v1 = (await call('POST', '/api/vehicles', { name: 'รถตู้ 1', plate: 'ฮข 1234', driver: 'คุณประเสริฐ', driver_en: 'Prasert', driver_id: '3-2002-00000-00-1', driver_phone: '089-000-2002' })).id;
+// The driver of van 1 has an account and is not the boarding agent of the crew in that van.
+const prasert = await mk({ username: 'prasert', name: 'ประเสริฐ', role: 'field', title: 'คนขับรถตู้ 1', phone: '089-000-2002', id_card: '3-2002-00000-00-1' });
+const v1 = (await call('POST', '/api/vehicles', { name: 'รถตู้ 1', plate: 'ฮข 1234', driver: 'คุณประเสริฐ', driver_en: 'Prasert', driver_id: '3-2002-00000-00-1', driver_phone: '089-000-2002', user_id: prasert })).id;
 const v2 = (await call('POST', '/api/vehicles', { name: 'รถตู้ 2', plate: 'กท 5678', driver: 'คุณวีระ', driver_en: 'Weera', driver_id: '3-2003-00000-00-2', driver_phone: '089-000-2003' })).id;
 const h1 = (await call('POST', '/api/hotels', { name: 'Harbour View Hotel ศรีราชา', phone: '038-000-000' })).id;
 await call('POST', '/api/hotels', { name: 'Sriracha Bay Hotel' });
@@ -41,14 +48,30 @@ for (let i = 0; i < crew.length; i++) {
   const c = crew[i], id = ids[i];
   await call('PATCH', `/api/crew/${id}`, { vehicle_id: c[9], hotel_id: c[10], room: c[11], docs: c[12] ? { Passport: 1, 'Seaman book': 1, 'ตั๋วเครื่องบิน': 1 } : { Passport: 1, 'Seaman book': i === 3 ? 1 : 0, 'ตั๋วเครื่องบิน': i === 3 ? 0 : 1 } });
   await call('PUT', `/api/crew/${id}/plan`, { plans: c[6].map(t) });
-  if (c[2] === 'on' && c[12]) await call('PATCH', `/api/crew/${id}`, { s4: { oktb: true, meet: true, imm: true } });
+  if (c[2] === 'on' && c[12]) await call('PATCH', `/api/crew/${id}`, { s4: { oktb: true, meet: true, imm: false } });
 }
 await call('PATCH', `/api/jobs/${job}`, { services: ['Crew change'], steps: [1, 1, 1, 0, 0, 0, 1, 0, 0], sent: { appoint: true, sched: true } });
-await call('POST', '/api/logout');
-await call('POST', '/api/login', { username: 'somsak', password: pw });
+
+// Photo-required points: the first crew member gets real photos (one sent by the driver), the others a reason for no photo.
+const full = (await call('GET', `/api/jobs/${job}`)).crew;
+const jpg = new Uint8Array(readFileSync(new URL('../tests/e2e/photo.jpg', import.meta.url)));
+const signIn = async name => { await call('POST', '/api/logout'); await call('POST', '/api/login', { username: name, password: pw }); };
+const steps = [];
 for (let i = 0; i < crew.length; i++) {
   const c = crew[i];
   if (c[8] !== somsak) continue;
-  for (let k = 0; k < c[7].length; k++) await call('POST', `/api/crew/${ids[i]}/confirm`, { idx: k, at: t(c[6][k] + c[7][k]) });
+  const cps = full.find(x => x.id === ids[i]).cps;
+  for (let k = 0; k < c[7].length; k++) steps.push({ crew: ids[i], k, cp_id: cps[k].id, at: t(c[6][k] + c[7][k]), need: cps[k].need_photo, name: cps[k].name, who: i === 0 && k === 3 ? 'prasert' : 'somsak', photo: i === 0 && k < 4 });
+}
+let who = '';
+for (const s of steps) {
+  if (who !== s.who) { await signIn(s.who); who = s.who; }
+  const body = { idx: s.k, at: s.at };
+  if (s.need && s.photo) {
+    body.upload_id = `seed-photo-${s.crew}-${s.k}-0001`;
+    const q = new URLSearchParams({ upload_id: body.upload_id, point: s.name, cp_idx: s.k, cp_id: s.cp_id, at: s.at, lat: '13.089700', lng: '100.883200', acc: 12, gps: 'ok' });
+    await call('POST', `/api/crew/${s.crew}/photos?${q}`, jpg, 'image/jpeg');
+  } else if (s.need) body.skip_reason = s.k % 2 ? 'พื้นที่ห้ามถ่ายรูป' : 'กล้องใช้ไม่ได้';
+  await call('POST', `/api/crew/${s.crew}/confirm`, body);
 }
 console.log(`seeded job ${job} with ${ids.length} crew · field password: ${pw}`);

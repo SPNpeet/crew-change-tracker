@@ -1,6 +1,6 @@
 import { api, flushOutbox, pendingCount, LOGOUT_EVENT } from './api.js';
-import { esc, hm } from './core.js';
-import { icon, toast, closeLb, busy } from './ui.js';
+import { esc, hm, userAv } from './core.js';
+import { icon, toast, closeLb, busy, openDialog, dlgHead } from './ui.js';
 import * as auth from './views/auth.js';
 import * as jobs from './views/jobs.js';
 import * as office from './views/office.js';
@@ -8,6 +8,7 @@ import * as field from './views/field.js';
 import * as owner from './views/owner.js';
 import * as admin from './views/admin.js';
 import * as report from './views/report.js';
+import * as packets from './views/packets.js';
 
 export const A = {
   me: null, settings: null, users: [], vehicles: [], hotels: [], brand: {},
@@ -22,8 +23,8 @@ export const A = {
   isAdmin: () => A.me && A.me.role === 'admin'
 };
 
-const VIEWS = { login: auth, setup: auth, jobs, newjob: jobs, job: office, field, crew: field, owner, admin, account: auth, report };
-[auth, jobs, office, field, owner, admin, report].forEach(v => { Object.assign(A.actions, v.actions || {}); Object.assign(A.changes, v.changes || {}); });
+const VIEWS = { login: auth, setup: auth, jobs, newjob: jobs, job: office, field, crew: field, owner, admin, account: auth, report, packets };
+[auth, jobs, office, field, owner, admin, report, packets].forEach(v => { Object.assign(A.actions, v.actions || {}); Object.assign(A.changes, v.changes || {}); });
 
 function parse(path) {
   const p = path.replace(/\/+$/, '') || '/';
@@ -34,6 +35,7 @@ function parse(path) {
   if (p === '/account') return { name: 'account', params: {} };
   if (p === '/jobs') return { name: 'jobs', params: { status: new URLSearchParams(location.search).get('status') || 'open' } };
   if (p === '/jobs/new') return { name: 'newjob', params: {} };
+  if ((m = /^\/jobs\/(\d+)\/packets$/.exec(p))) return { name: 'packets', params: { id: +m[1] } };
   if ((m = /^\/jobs\/(\d+)\/report$/.exec(p))) return { name: 'report', params: { id: +m[1] } };
   if ((m = /^\/jobs\/(\d+)(?:\/([1-9]))?$/.exec(p))) return { name: 'job', params: { id: +m[1], step: +(m[2] || 0) } };
   if (p === '/field') return { name: 'field', params: {} };
@@ -42,7 +44,14 @@ function parse(path) {
   return { name: 'home', params: {} };
 }
 
+// A view with unsaved edits sets A.leave to a function that returns true while there is something to lose.
+const unsaved = () => { try { return !!(A.leave && A.leave()); } catch (e) { return false; } };
+function askLeave(then) {
+  openDialog(`<form class="dlg-form">${dlgHead('ยังไม่ได้บันทึก')}<div class="dlg-b"><p>มีการแก้ไขที่ยังไม่ได้บันทึก ถ้าออกจากหน้านี้ สิ่งที่แก้จะหายไป</p></div><div class="dlg-f"><button type="button" class="btn line" data-close>อยู่หน้านี้ต่อ</button><button type="submit" class="btn line danger">ออกโดยไม่บันทึก</button></div></form>`, () => { A.leave = null; then(); });
+}
+
 export function go(path, replace) {
+  if (unsaved()) return askLeave(() => go(path, replace));
   if (path !== location.pathname + location.search) {
     try { history[replace ? 'replaceState' : 'pushState']({ app: 1 }, '', path); } catch (e) {}
   }
@@ -54,6 +63,7 @@ export async function route() {
   const seq = ++loadSeq;
   const alive = () => seq === loadSeq;
   const r = parse(location.pathname);
+  A.leave = null;
   closeLb();
   const dlg = document.getElementById('dlg');
   if (dlg.open) dlg.close();
@@ -70,7 +80,7 @@ export async function route() {
     if (!alive()) return;
   }
   if (r.name === 'home') return go(A.isOffice() ? '/jobs' : '/field', true);
-  if (A.me && ['jobs', 'newjob', 'job', 'report'].includes(r.name) && !A.isOffice()) return go('/field', true);
+  if (A.me && ['jobs', 'newjob', 'job', 'report', 'packets'].includes(r.name) && !A.isOffice()) return go('/field', true);
   if (r.name === 'admin' && !A.isAdmin()) return go('/', true);
   A.route = r;
   document.documentElement.lang = 'th';
@@ -114,7 +124,7 @@ export function chrome(show) {
   mt.innerHTML = items.map(([h, , s, ic, names]) => `<a href="${h}" data-link aria-current="${names.includes(cur)}">${icon(ic)}<span>${s}</span></a>`).join('');
   mt.style.gridTemplateColumns = `repeat(${items.length},1fr)`;
   const mb = document.getElementById('mebtn');
-  mb.innerHTML = `<span class="av sm">${esc([...A.me.name][0] || '?')}</span><span class="nm">${esc(A.me.name)}</span>`;
+  mb.innerHTML = `${userAv(A.me, 'sm')}<span class="nm">${esc(A.me.name)}</span>`;
   mb.setAttribute('aria-current', String(cur === 'account'));
   document.body.classList.toggle('detail', cur === 'crew');
 }
@@ -137,13 +147,26 @@ document.addEventListener('change', e => {
   const fn = A.changes[t.dataset.chg];
   if (fn) Promise.resolve(fn(t, e)).catch(err => toast(err.message || 'บันทึกไม่สำเร็จ'));
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && !document.getElementById('lb').hidden) closeLb(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !document.getElementById('lb').hidden) closeLb();
+  // Rows and other non-button controls that carry an action are operable with Enter or Space.
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-act][tabindex]:not(button):not(a)')) { e.preventDefault(); e.target.click(); }
+});
+// A profile photo that fails to load is removed so the initial letter underneath shows.
+document.addEventListener('error', e => { if (e.target.matches && e.target.matches('img.avimg')) e.target.remove(); }, true);
 
 A.actions['lb-close'] = () => closeLb();
 A.actions.reload = () => location.reload();
 A.actions.back = () => { if (history.state && history.state.app) history.back(); else go(A.isOffice() ? '/jobs' : '/field', true); };
 
-window.addEventListener('popstate', route);
+window.addEventListener('popstate', () => {
+  if (!unsaved()) return route();
+  // Back/forward already changed the address: put the page with the unsaved edits back, then ask.
+  const stay = A.route.name === 'admin' ? `/admin/${A.route.params.tab}` : location.pathname;
+  try { history.pushState({ app: 1 }, '', stay); } catch (e) {}
+  askLeave(() => history.back());
+});
+window.addEventListener('beforeunload', e => { if (unsaved()) { e.preventDefault(); e.returnValue = ''; } });
 function leaveSession() {
   if (A.route.name === 'owner' || A.route.name === 'login' || A.route.name === 'setup') return;
   A.me = null;

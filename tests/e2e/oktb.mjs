@@ -41,14 +41,23 @@ const save = (name, base64) => { mkdirSync(OUT, { recursive: true }); writeFileS
 const download = async name => {
   const file = join(DL, name);
   rmSync(file, { force: true });
+  const prior = new Set(b.downloads.keys());
+  if (!await eventually(() => b.eval(`!document.querySelector('#oktbf button[type=submit]').disabled`))) return null;
   await b.eval(`${$('#oktbf')}.requestSubmit()`);
-  const done = await eventually(() => existsSync(file) && !readdirSync(DL).some(f => f.endsWith('.crdownload')), 60000);
-  await sleep(300);
-  return done ? new Uint8Array(readFileSync(file)) : null;
+  let event;
+  const done = await eventually(() => {
+    event = [...b.downloads.values()].find(d => !prior.has(d.guid) && d.suggestedFilename === name);
+    return event?.state === 'completed' && existsSync(event.filePath || file);
+  }, 60000);
+  writeFileSync(join(OUT, 'download-events.json'), JSON.stringify([...b.downloads.values()], null, 2));
+  if (!done) return null;
+  const bytes = readFileSync(event.filePath || file);
+  if (event.receivedBytes !== bytes.length) throw Error('Completed download byte count disagrees with the saved PDF');
+  return new Uint8Array(bytes);
 };
 
 await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI));` });
-try { await b.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DL }); } catch (e) { await b.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: DL }); }
+try { await b.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DL, eventsEnabled: true }); } catch (e) { await b.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: DL, eventsEnabled: true }); }
 const csp = [];
 const collect = async () => csp.push(...(await b.eval(`window.__csp || []`)));
 

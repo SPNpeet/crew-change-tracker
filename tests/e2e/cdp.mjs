@@ -24,6 +24,9 @@ export async function login(username, password) {
 
 export async function browser() {
   if (!existsSync(CHROME)) throw new Error('Chrome not found at ' + CHROME + ' (set CHROME to the chrome executable)');
+  let occupied = false;
+  try { await fetch(`http://127.0.0.1:${PORT}/json/version`); occupied = true; } catch {}
+  if (occupied) throw new Error(`CDP port ${PORT} is occupied; refusing to attach to an existing browser`);
   const dir = mkdtempSync(join(tmpdir(), 'cdp-'));
   const proc = spawn(CHROME, ['--headless=new', '--disable-gpu', '--hide-scrollbars', `--remote-debugging-port=${PORT}`, `--user-data-dir=${dir}`, 'about:blank'], { stdio: 'ignore' });
   let ver;
@@ -31,17 +34,19 @@ export async function browser() {
   const page = ver.find(t => t.type === 'page');
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise(r => ws.addEventListener('open', r, { once: true }));
-  let id = 0; const pend = new Map(); const logs = [];
+  let id = 0; const pend = new Map(); const logs = []; const downloads = new Map();
   ws.addEventListener('message', m => {
     const d = JSON.parse(m.data);
     if (d.id && pend.has(d.id)) { const p = pend.get(d.id); pend.delete(d.id); d.error ? p.rej(new Error(d.error.message)) : p.res(d.result); }
+    if (d.method === 'Browser.downloadWillBegin') downloads.set(d.params.guid,{...d.params,startedAt:Date.now()});
+    if (d.method === 'Browser.downloadProgress') downloads.set(d.params.guid,{...downloads.get(d.params.guid),...d.params,updatedAt:Date.now()});
     if (d.method === 'Runtime.exceptionThrown') logs.push('EXC ' + d.params.exceptionDetails.exception?.description?.split('\n')[0]);
     if (d.method === 'Runtime.consoleAPICalled' && d.params.type === 'error') logs.push('ERR ' + d.params.args.map(a => a.value || a.description).join(' '));
   });
   const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; pend.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params })); });
   await send('Page.enable'); await send('Runtime.enable'); await send('Network.enable');
   const b = {
-    logs,
+    logs, downloads,
     async cookie(value) { await send('Network.setCookie', { name: 'cct_s', value, url: BASE, httpOnly: true }); },
     async size(w, h, mobile) { await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: !!mobile }); await send('Emulation.setTouchEmulationEnabled', { enabled: !!mobile }); },
     async go(path, wait = 1500) { await send('Page.navigate', { url: BASE + path }); await new Promise(r => setTimeout(r, wait)); },

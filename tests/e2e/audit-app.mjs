@@ -5,10 +5,12 @@ const shots = new Set((process.env.SHOTS || '').split(',').filter(Boolean));
 const office = await login(ADMIN_USER, process.env.ADMIN_PASS);
 const field = await login('somsak', FIELD_PASS);
 const lead = await login('napa', FIELD_PASS);
+const driver = await login('prasert', FIELD_PASS);
 const job = await (await fetch(BASE + '/api/jobs/1', { headers: { cookie: 'cct_s=' + office } })).json();
 const token = job.job.owner_token;
 const c2 = job.crew.find(c => c.name === 'Arun Pillai').id;
 const c5 = job.crew.find(c => c.name === 'Oleg Marchenko').id;
+const c1 = job.crew.find(c => c.name === 'Rafael Mendoza').id;
 
 const pages = [
   ['login', null, '/login'],
@@ -19,6 +21,7 @@ const pages = [
   ['account', office, '/account'],
   ['field-office', office, '/field'],
   ['field', field, '/field'], ['crew', field, '/field/' + c2], ['lead', lead, '/field'], ['lead-off', lead, '/field/' + c5],
+  ['driver', driver, '/field'], ['driver-crew', driver, '/field/' + c1], ['driver-account', driver, '/account'],
   ['owner', null, '/t/' + token]
 ];
 const only = process.env.ONLY ? new RegExp(process.env.ONLY) : null;

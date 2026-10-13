@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {checkpointBody} from '../checkpoint-client.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { browser, login, BASE, OUT, ADMIN_USER, FIELD_PASS } from './cdp.mjs';
@@ -8,6 +9,7 @@ const token = await login(ADMIN_USER, process.env.ADMIN_PASS);
 const checks = [];
 const ok = (condition, label) => { assert.ok(condition, label); checks.push(label); };
 async function call(method, path, body) {
+  body = await checkpointBody(BASE, 'cct_s=' + token, path, body, method);
   const r = await fetch(BASE + path, { method, headers: { cookie: 'cct_s=' + token, 'x-cct': '1', 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
   assert.equal(r.status, 200, `${method} ${path}`);
   return r;

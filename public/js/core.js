@@ -26,6 +26,7 @@ export function fromInput(v) {
 export const initials = n => String(n || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(w => [...w][0]).join('').toUpperCase();
 const AV = [['#e0e7ff', '#3730a3'], ['#dcfce7', '#166534'], ['#fef3c7', '#92400e'], ['#fce7f3', '#9d174d'], ['#e0f2fe', '#075985'], ['#ede9fe', '#5b21b6']];
 export function avatar(c, big) { const k = [...String(c.name)].reduce((a, ch) => a + ch.charCodeAt(0), 0) % AV.length; return `<span class="av" style="background:${AV[k][0]};color:${AV[k][1]}${big ? ';width:44px;height:44px;font-size:15px' : ''}">${esc(initials(c.name))}</span>`; }
+export const userAv = (u, cls = '') => `<span class="av ${cls}">${esc([...String(u.name || '?')][0] || '?')}${u.avatar_at ? `<img class="avimg" src="/api/avatar/${u.id}?v=${u.avatar_at}" alt="">` : ''}</span>`;
 export const pill = (cls, t) => `<span class="pill ${cls}">${esc(t)}</span>`;
 export const typeTag = c => `<span class="tag ${c.type}">${c.type === 'on' ? 'On signer' : 'Off signer'}</span>`;
 
@@ -68,11 +69,48 @@ export function planCell(c, j, late) {
 export const missingDocs = (c, docs) => docs.filter(d => !c.docs[d]);
 export const doneCount = c => c.cps.filter(x => x.actual != null).length;
 
+export const submissionRecorded = c => c.packet_submission !== undefined ? !!c.packet_submission : !!c.s4?.imm;
+export const immigrationUrgency = left => left == null ? null : left < 0 ? 'overdue' : left <= 360 ? 'urgent' : left <= 1440 ? 'advance' : null;
+
+const floorMin = ms => Math.floor(ms / MIN) * MIN;
+export function forecast(c, j, late) {
+  const p = c.cps[j].plan, e = expected(c, j, late);
+  if (p == null || e === p) return null;
+  return { plan: p, at: e, late: (floorMin(e) - floorMin(p)) / MIN, from: c.cps[lastDone(c)].name };
+}
+export function shiftNote(c, late) {
+  const j = c.cps.findIndex((x, k) => x.actual == null && forecast(c, k, late));
+  if (j < 0) return '';
+  const f = forecast(c, j, late), end = c.cps[c.chain_end];
+  return `เวลา "คาดว่า" = เวลาตามแผน + ช้า ${dur(f.late)} จากจุด ${f.from}${end ? ` · เลื่อนถึงจุด ${end.name} จุดหลังจากนั้นยึดตามแผน` : ''}`;
+}
+export function forecastWhy(c, j, late) {
+  const f = forecast(c, j, late);
+  return f ? `แผน ${dhm(f.plan)} + ช้า ${dur(f.late)} จากจุด ${f.from}` : '';
+}
+export function forecastNote(c, j, late) {
+  const f = forecast(c, j, late);
+  return f ? `คาดว่า ${dhm(f.at)} = ${forecastWhy(c, j, late)}` : '';
+}
+
+export const CAPACITY = { agent: 'ผู้ดูแล', driver: 'คนขับ', lead: 'หัวหน้างานภาคสนาม', office: 'สำนักงาน', admin: 'ผู้ดูแลระบบ' };
+export const SKIP_REASONS = ['กล้องใช้ไม่ได้', 'พื้นที่ห้ามถ่ายรูป', 'ลูกเรือไม่สะดวก'];
+export const GPS_WHY = { denied: 'ไม่อนุญาตตำแหน่ง', unavailable: 'หาตำแหน่งไม่ได้', timeout: 'หมดเวลาหาตำแหน่ง' };
+export const gpsText = p => p.lat != null && p.lng != null ? `พิกัดจากมือถือ ${(+p.lat).toFixed(5)}, ${(+p.lng).toFixed(5)}${p.acc != null ? ` (±${Math.round(p.acc)} ม.)` : ''}` : `ไม่มีพิกัด${GPS_WHY[p.gps] ? ` (${GPS_WHY[p.gps]})` : ''}`;
+export const lagged = (at, received) => at != null && received != null && Math.abs(received - at) > 2 * MIN;
+export const cpPhotos = (c, k) => c.photos.filter(p => p.cp_id != null && p.cp_id === c.cps[k]?.id);
+export const photoDue = (c, x) => !!x.need_photo && x.actual != null && !cpPhotos(c, x.idx).length;
+export function evidence(c) {
+  const need = c.cps.filter(x => x.need_photo && x.actual != null);
+  return { need: need.length, have: need.filter(x => cpPhotos(c, x.idx).length).length };
+}
+
 export function prepItems(job, crew, now, ctx) {
   const out = [];
   const late = ctx.settings.late_min;
   for (const c of crew) {
     const st = status(c, now, late), i = nextIdx(c);
+    for (const x of c.cps) if (photoDue(c, x)) out.push({ w: 2, cls: 'warn-c', tag: 'รูป', text: `${c.name} · ${x.name} รูปค้าง${x.skip ? ` (${x.skip})` : ''}` });
     if (i === -1) continue;
     const n = c.cps[i].name;
     const veh = ctx.vehicle(c.vehicle_id);
@@ -81,7 +119,7 @@ export function prepItems(job, crew, now, ctx) {
     else if (/รถ|ท่าเรือ|สนามบิน/.test(n)) who = veh ? `${veh.name} ${veh.driver}` : 'จัดรถ (ยังไม่มีรถ)';
     else if (/Gate|เรือ/.test(n)) who = job.agent || 'Local agent';
     if (st.k === 'late' && st.waiting) out.push({ w: 0, cls: 'late', tag: 'ด่วน', text: `${c.name} ยังไม่ถึงจุด "${n}" ช้ากว่าแผน ${dur(st.late)} · ตามพนักงานภาคสนาม และแจ้ง ${who}` });
-    else if (st.k === 'late') out.push({ w: 0, cls: 'late', tag: 'ด่วน', text: `${c.name} ช้ากว่าแผน ${dur(st.late)} · แจ้ง ${who} ว่าจะถึง "${n}" ราว ${dhm(st.eta)}` });
+    else if (st.k === 'late') out.push({ w: 0, cls: 'late', tag: 'ด่วน', text: `${c.name} ช้ากว่าแผน ${dur(st.late)} · แจ้ง ${who} ว่าจะถึง "${n}" ราว ${dhm(st.eta)} (= ${forecastWhy(c, i, late)})` });
     else if (st.k === 'soon') out.push({ w: 1, cls: 'warn-c', tag: 'ภายใน ' + dur(st.until), text: `${c.name} ใกล้ถึง "${n}" (${dhm(expected(c, i, late))}) · เตรียม ${who}` });
     else if (st.k === 'noplan') out.push({ w: 2, cls: 'warn-c', tag: 'แผน', text: `${c.name} ยังไม่ได้ใส่เวลาตามแผน` });
     if (c.type === 'on' && i === 0 && missingDocs(c, ctx.settings.docs).length) out.push({ w: 2, cls: 'warn-c', tag: 'เอกสาร', text: `${c.name} ยังขาด ${missingDocs(c, ctx.settings.docs).join(', ')}` });
@@ -91,8 +129,9 @@ export function prepItems(job, crew, now, ctx) {
   }
   if (job.imm_deadline) {
     const left = (job.imm_deadline - now) / MIN;
-    const pend = crew.filter(c => c.type === 'on' && !c.s4.imm);
-    if (pend.length && left < 360) out.push({ w: left < 0 ? 0 : 1, cls: left < 0 ? 'late' : 'warn-c', tag: 'ตม.', text: left < 0 ? `เกินกำหนดยื่นเอกสาร ตม. (${pend.map(c => c.name).join(', ')})` : `อีก ${dur(left)} ถึงกำหนดยื่นเอกสาร ตม. (${pend.map(c => c.name).join(', ')})` });
+    const pend = crew.filter(c => c.type === 'on' && !submissionRecorded(c));
+    const deadline = immigrationUrgency(left);
+    if (pend.length && deadline) out.push({ deadline, w: left < 0 ? 0 : deadline === 'urgent' ? 1 : 2, cls: left < 0 ? 'late' : 'warn-c', tag: 'ตม. ' + (deadline === 'advance' ? '24 ชม.' : deadline === 'urgent' ? '6 ชม.' : 'เกินกำหนด'), text: left < 0 ? `เกินกำหนดยื่นเอกสาร ตม. (${pend.map(c => c.name).join(', ')})` : `อีก ${dur(left)} ถึงกำหนดยื่นเอกสาร ตม. (${pend.map(c => c.name).join(', ')})` });
   }
   return out.sort((a, b) => a.w - b.w);
 }

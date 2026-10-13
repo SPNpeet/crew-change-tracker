@@ -119,23 +119,27 @@ job = await get('/api/jobs/1');
 ok(job.job.owner_token !== oldToken, 'step8 new owner link created');
 ok(await eventually(async () => (await text('.linkbox')).includes(job.job.owner_token)), 'step8 new link shown');
 
-// field phone: confirm, note, photo, undo
+// field phone: photo and confirm (the next point needs a photo), note, photo, undo
 await b.size(390, 800, true);
 await b.cookie(field);
 await b.go('/field/' + arun.id, 1800);
 const before = (await get('/api/jobs/1')).crew.find(c => c.id === arun.id).cps.filter(x => x.actual).length;
-await click('[data-act="f-confirm"]', 0, 2600);
-let a2 = (await get('/api/jobs/1')).crew.find(c => c.id === arun.id);
-ok(a2.cps.filter(x => x.actual).length === before + 1, 'field confirm records next checkpoint');
+// camera = a picture made on a canvas, so it is a different file from the gallery fixture used further down
+const pick = (sel, camera) => b.eval(`(async () => { const bytes = ${camera ? `new Uint8Array(await (await new Promise(r => { const cv = document.createElement('canvas'); cv.width = 640; cv.height = 480; const g = cv.getContext('2d'); g.fillStyle = '#7a8fa6'; g.fillRect(0, 0, 640, 480); cv.toBlob(r, 'image/jpeg', 0.8); })).arrayBuffer())` : `Uint8Array.from(atob(${JSON.stringify(photo().toString('base64'))}), c => c.charCodeAt(0))`}; const dt = new DataTransfer(); dt.items.add(new File([bytes], 'p.jpg', { type: 'image/jpeg' })); const inp = ${sel}; inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+ok((await text('label.big.snap')).trim() === 'ถ่ายรูปและยืนยัน: ขึ้นรถ' && !(await b.eval(`!!document.querySelector('[data-act="f-confirm"]')`)), 'field point that needs a photo offers photo and confirm');
+await pick(`document.querySelector('input[data-chg="f-snap"]')`, true);
+let a2;
+ok(await eventually(async () => { a2 = (await get('/api/jobs/1')).crew.find(c => c.id === arun.id); return a2.cps.filter(x => x.actual).length === before + 1; }, 25000), 'field confirm records next checkpoint');
+ok(a2.photos.length === 1 && a2.photos[0].cp_idx === before && Math.abs(a2.photos[0].at - a2.cps[before].actual) < 3000, 'field photo and confirm stores the photo on that point with the same time');
 await click('[data-act="f-note"]', 0, 300);
 await setVal('#noteedit textarea', 'กระเป๋าตกค้าง รอ 30 นาที');
 await submit('#noteedit');
 a2 = (await get('/api/jobs/1')).crew.find(c => c.id === arun.id);
 ok(a2.notes.some(n => n.text.includes('กระเป๋า')), 'field note saved');
-await b.eval(`(async () => { const bytes = Uint8Array.from(atob(${JSON.stringify(photo().toString('base64'))}), c => c.charCodeAt(0)); const dt = new DataTransfer(); dt.items.add(new File([bytes], 'p.jpg', { type: 'image/jpeg' })); const inp = document.querySelectorAll('input[data-chg="f-photo"]')[1]; inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+await pick(`document.querySelectorAll('input[data-chg="f-photo"]')[1]`);
 await sleep(9000);
 a2 = (await get('/api/jobs/1')).crew.find(c => c.id === arun.id);
-ok(a2.photos.length === 1, 'field photo uploaded (' + a2.photos.length + ')');
+ok(a2.photos.length === 2, 'field photo uploaded (' + a2.photos.length + ')');
 ok(await b.eval(`!!document.querySelector('.pgrid img')`), 'field photo thumbnail shown');
 await b.eval(`window.confirm = () => true`);
 await click('[data-act="f-undo"]', 0, 1800);

@@ -1,3 +1,5 @@
+import {migrateLocal} from './local-migrations.mjs';
+import {checkpointBody,assignmentPath} from './checkpoint-client.mjs';
 // Local-only behavioral audit. All names/passwords/data are synthetic fixtures.
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
@@ -6,11 +8,13 @@ import {mkdtempSync,readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {gunzipSync} from 'node:zlib';
-const PORT=8944,BASE=`http://127.0.0.1:${PORT}`,KEY='test-setup-key',PW='readiness-fixture-only';
+const PORT=Number(process.env.CCT_READINESS_PORT||8944),BASE=`http://127.0.0.1:${PORT}`,KEY='test-setup-key',PW='readiness-fixture-only';
 const wr=join(process.cwd(),'node_modules/wrangler/bin/wrangler.js');
 const persist=mkdtempSync(join(tmpdir(),'cct-readiness-'));
 let server,admin;const S={};
 function client(){let cookie='';return async(method,path,body,extra={})=>{
+ body=await checkpointBody(BASE,cookie,path,body,method);
+    path=await assignmentPath(BASE,cookie,path,method);
  const bytes=body instanceof Uint8Array;const headers={'x-cct':'1',cookie,...extra.headers};
  if(body!==undefined&&!bytes)headers['content-type']='application/json';
  const r=await fetch(BASE+path,{method,headers,body:body===undefined?undefined:bytes?body:JSON.stringify(body)});
@@ -21,7 +25,7 @@ const ok=r=>{assert.equal(r.status,200,JSON.stringify(r.data));return r.data;};
 const anon=client(),office=client(),field=client(),other=client();
 before(async()=>{
  try{await fetch(BASE+'/api/health');throw new Error('Port occupied');}catch(e){if(e.message==='Port occupied')throw e;}
- execFileSync(process.execPath,[wr,'d1','migrations','apply','cct','--local','--persist-to',persist],{stdio:'ignore',windowsHide:true});
+ migrateLocal(persist);
  server=spawn(process.execPath,[wr,'dev','--local','--ip','127.0.0.1','--port',String(PORT),'--persist-to',persist,'--var','SETUP_KEY:'+KEY,'--var','CRON_NOW:'+Date.UTC(2026,9,9,19),'--test-scheduled'],{stdio:'ignore',windowsHide:true});
  for(let i=0;i<100;i++){try{if((await fetch(BASE+'/api/health')).ok)return;}catch{}await new Promise(r=>setTimeout(r,300));}throw new Error('Local startup timeout');
 });

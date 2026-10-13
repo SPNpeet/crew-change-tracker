@@ -308,3 +308,15 @@ export async function buildPack(L, brand, files, title) {
   doc.setCreator('Crew Change Tracker');
   return doc.save();
 }
+
+export async function buildEvidencePack(canvases, files, title) {
+  const lib = await import('./vendor/pdf-lib.esm.min.js');
+  const doc = await lib.PDFDocument.create();
+  for (const cv of canvases) {
+    const png = await doc.embedPng(await canvasBytes(cv, 'image/png'));
+    doc.addPage(A4).drawImage(png, { x: 0, y: 0, width: A4[0], height: A4[1] });
+  }
+  for (const f of files) await (f.mime === 'application/pdf' ? pdfPages(lib, doc, f) : imagePage(doc, f));
+  doc.setTitle(title); doc.setCreator('Crew Change Tracker');
+  return doc.save();
+}

@@ -1,6 +1,6 @@
 import { A, go, reloadRefs } from '../app.js';
 import { api, apiBytes } from '../api.js';
-import { esc, words, glue, hm, fmtD, fmtFull, dateTh, dhm, dur, toInput, fromInput, avatar, pill, typeTag, nextIdx, status, current, lastTime, planCell, expected, missingDocs, prepItems, mail, missText, doneCount, MIN, DEFAULT_OKTB, FILE_KINDS, fileSize, ymdOf } from '../core.js';
+import { esc, words, glue, hm, fmtD, fmtFull, dateTh, dhm, dur, toInput, fromInput, avatar, pill, typeTag, nextIdx, status, current, lastTime, planCell, expected, missingDocs, prepItems, submissionRecorded, mail, missText, doneCount, MIN, DEFAULT_OKTB, FILE_KINDS, fileSize, ymdOf, forecastWhy, shiftNote, cpPhotos, photoDue, evidence, gpsText, lagged, CAPACITY } from '../core.js';
 import { icon, toast, copy, openDialog, dlgHead, dlgFoot, openLb, saveFile, uploadType } from '../ui.js';
 import { jobForm, readJobForm } from './jobs.js';
 
@@ -34,7 +34,7 @@ async function load(id) {
 
 export async function enter(r, alive) {
   if (!J || J.job.id !== r.params.id) app().innerHTML = '<div class="muted">กำลังโหลดงาน...</div>';
-  await load(r.params.id);
+  await Promise.all([load(r.params.id), r.params.step === 7 ? reloadRefs().catch(() => {}) : null]);
   if (!alive()) return;
   if (!r.params.step) {
     const first = J.job.steps.findIndex(x => !x);
@@ -81,6 +81,7 @@ function side(k) {
     </div>
     <nav class="card steplist" aria-label="ขั้นตอนการทำงาน"><div class="h">ขั้นตอนการทำงาน</div>${STEPS.map((s, i) => `<a class="st ${j.steps[i] ? 'done' : ''}" href="/jobs/${j.id}/${i + 1}" data-link aria-current="${k === i + 1}"><span class="mk">${j.steps[i] ? icon('check') : i + 1}</span><span class="tx">${esc(s.n)}</span></a>`).join('')}</nav>
     <a class="back side-back" href="/jobs" data-link>${icon('left')}งานทั้งหมด</a>
+    <a class="back side-back" href="/jobs/${j.id}/packets" data-link>กลุ่ม / ชุดเอกสาร / อนุมัติภายใน</a>
   </aside>`;
 }
 
@@ -98,7 +99,7 @@ function head(k) {
 }
 
 const sentLine = key => J.job.sent[key] ? `ส่งล่าสุด ${dhm(J.job.sent[key])}` : 'ยังไม่ได้บันทึกว่าส่ง';
-const mailCard = (title, kind, sentKey, extra = '') => `<div class="card"><div class="card-h"><h3>${esc(title)}</h3><span class="sub">${sentLine(sentKey)}</span><div class="act">${extra}<button class="btn" data-act="o-copymail" type="button">${icon('copy')}คัดลอกอีเมล</button>${closed() ? '' : `<button class="btn line" data-act="o-sent" data-key="${sentKey}" type="button">${icon('send')}บันทึกว่าส่งแล้ว</button>`}</div></div>
+const mailCard = (title, kind, sentKey, extra = '') => `<div class="card"><div class="card-h"><h2>${esc(title)}</h2><span class="sub">${sentLine(sentKey)}</span><div class="act">${extra}<button class="btn" data-act="o-copymail" type="button">${icon('copy')}คัดลอกอีเมล</button>${closed() ? '' : `<button class="btn line" data-act="o-sent" data-key="${sentKey}" type="button">${icon('send')}บันทึกว่าส่งแล้ว</button>`}</div></div>
   <div class="card-b"><textarea class="mail" id="mailtext" spellcheck="false">${esc(mail(kind, J.job, J.crew, ctx()))}</textarea><div class="muted s13" style="margin-top:6px">แก้ข้อความได้ก่อนคัดลอก · ระบบไม่ได้ส่งอีเมลเอง ให้วางในอีเมลบริษัทแล้วส่ง</div></div></div>`;
 const hint = t => `<div class="hint">${icon('info')}<span>${t}</span></div>`;
 const who = c => `<div class="who2">${avatar(c)}<div><div class="nm">${esc(c.name)}</div><div class="sub">${esc(c.rank || '—')} · ${esc(c.flight || 'ยังไม่มีเที่ยวบิน')}</div></div></div>`;
@@ -110,10 +111,10 @@ function body(k, now) {
     const rows = crew.map(c => `<tr class="${missingDocs(c, docs).length ? 'bad' : ''}"><td>${who(c)}</td><td>${typeTag(c)}</td>${docs.map(d => `<td><button class="doc ${c.docs[d] ? 'ok' : 'late'}" data-act="o-doc" data-id="${c.id}" data-doc="${esc(d)}" type="button" ${closed() ? 'disabled' : ''}>${c.docs[d] ? icon('check') + 'ได้รับ' : icon('x') + 'ยังไม่มี'}</button>${nKind(c, docKind(d)) ? `<div class="fhint">มีไฟล์แนบ ${nKind(c, docKind(d))}</div>` : ''}</td>`).join('')}<td>${missingDocs(c, docs).length ? pill('late', 'ขาด ' + missingDocs(c, docs).length) : pill('ok', 'ครบ')}</td><td class="acts"><button class="btn line sm" data-act="o-files" data-id="${c.id}" type="button">${icon('note')}ไฟล์เอกสาร (${(c.files || []).length})</button>${closed() ? '' : `<button class="iconbtn plain" data-act="o-editcrew" data-id="${c.id}" type="button" title="แก้ไข" aria-label="แก้ไข ${esc(c.name)}">${icon('edit')}</button><button class="iconbtn" data-act="o-delcrew" data-id="${c.id}" type="button" title="ลบ" aria-label="ลบ ${esc(c.name)}">${icon('trash')}</button>`}</td></tr>`).join('');
     const miss = missText(crew, docs);
     return `<div class="stack">
-      <div class="card"><div class="card-h"><h3>รายชื่อลูกเรือและเอกสาร</h3><span class="sub">${crew.length} คน</span><div class="act"><button class="btn line sm" data-act="o-copymiss" type="button">${icon('copy')}คัดลอกรายการที่ขาด</button></div></div>
+      <div class="card"><div class="card-h"><h2>รายชื่อลูกเรือและเอกสาร</h2><span class="sub">${crew.length} คน</span><div class="act"><button class="btn line sm" data-act="o-copymiss" type="button">${icon('copy')}คัดลอกรายการที่ขาด</button></div></div>
         ${crew.length ? `<div class="scroll"><table class="t tight crewdocs"><thead><tr><th>ลูกเรือ</th><th>ประเภท</th>${docs.map(d => `<th>${esc(d)}</th>`).join('')}<th>สรุป</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="card-b muted">ยังไม่มีลูกเรือ เพิ่มจากแบบฟอร์มด้านล่าง</div>'}</div>
       <div class="cols">
-        ${closed() ? '' : `<div class="card"><div class="card-h"><h3>เพิ่มลูกเรือในงานนี้</h3></div><div class="card-b"><form class="form" id="addcrew" style="grid-template-columns:1fr 1fr">
+        ${closed() ? '' : `<div class="card"><div class="card-h"><h2>เพิ่มลูกเรือในงานนี้</h2></div><div class="card-b"><form class="form" id="addcrew" style="grid-template-columns:1fr 1fr">
           <label class="f" style="grid-column:1 / -1">ชื่อ-นามสกุล<input name="name" required maxlength="120" placeholder="เช่น Kenji Sato"></label>
           <label class="f">ตำแหน่ง<input name="rank" maxlength="40" placeholder="เช่น 2/O"></label>
           <label class="f">ประเภท<select name="type"><option value="on">On signer (ขึ้นเรือ)</option><option value="off">Off signer (ลงเรือ)</option></select></label>
@@ -126,14 +127,14 @@ function body(k, now) {
           <div class="ferr" role="alert" style="grid-column:1 / -1"></div>
           <button class="btn" type="submit" style="grid-column:1 / -1">${icon('plus')}เพิ่มลูกเรือ</button>
         </form></div></div>`}
-        <div class="card"><div class="card-h"><h3>รายการที่ต้องขอเพิ่มจากลูกค้า</h3></div><div class="card-b pre" style="color:${miss ? 'var(--ink2)' : 'var(--green)'}">${esc(miss || (crew.length ? 'เอกสารครบทุกคนแล้ว' : 'ยังไม่มีลูกเรือ'))}</div></div>
+        <div class="card"><div class="card-h"><h2>รายการที่ต้องขอเพิ่มจากลูกค้า</h2></div><div class="card-b pre" style="color:${miss ? 'var(--ink2)' : 'var(--green)'}">${esc(miss || (crew.length ? 'เอกสารครบทุกคนแล้ว' : 'ยังไม่มีลูกเรือ'))}</div></div>
       </div>
     </div>`;
   }
   if (k === 2) {
     const hist = J.activity.filter(a => a.kind === 'eta');
     return `<div class="cols">
-      <div class="card"><div class="card-h"><h3>ตารางเรือปัจจุบัน</h3><span class="sub">${esc(j.port || '')}</span></div><div class="card-b">
+      <div class="card"><div class="card-h"><h2>ตารางเรือปัจจุบัน</h2><span class="sub">${esc(j.port || '')}</span></div><div class="card-b">
         <div class="kpis kpi3">${[['ETA', j.eta], ['ETB', j.etb], ['ETD', j.etd]].map(([l, v]) => `<div><span>${l}</span><b style="font-size:20px">${v ? hm(v) : '—'}</b><span>${v ? fmtD(v).slice(0, 5) : 'ยังไม่ทราบ'}</span></div>`).join('')}</div>
         ${closed() ? '' : `<form class="form form-t" id="schedf">
           ${['eta', 'etb', 'etd'].map(f => `<label class="f">${f.toUpperCase()}<input type="datetime-local" name="${f}" value="${toInput(j[f])}"></label>`).join('')}
@@ -143,35 +144,35 @@ function body(k, now) {
         <div class="row" style="margin-top:12px"><button class="btn" data-act="o-copykind" data-kind="sched" type="button">${icon('copy')}คัดลอกข้อความอัปเดตลูกค้า</button>${closed() ? '' : `<button class="btn line" data-act="o-sent" data-key="sched" type="button">${icon('send')}บันทึกว่าแจ้งแล้ว</button>`}</div>
         <div class="muted s13" style="margin-top:8px">${sentLine('sched')}</div>
       </div></div>
-      <div class="card"><div class="card-h"><h3>ประวัติการเปลี่ยนแปลง</h3></div><div class="card-b feed">${hist.length ? hist.map(l => `<div><span class="tm">${hm(l.at)}</span><span>${esc(l.text)}<div class="sub">${esc(l.who || '')} · ${fmtD(l.at).slice(0, 5)}</div></span></div>`).join('') : '<div class="muted">ยังไม่มีการบันทึกตารางเรือ</div>'}</div></div>
+      <div class="card"><div class="card-h"><h2>ประวัติการเปลี่ยนแปลง</h2></div><div class="card-b feed">${hist.length ? hist.map(l => `<div><span class="tm">${hm(l.at)}</span><span>${esc(l.text)}<div class="sub">${esc(l.who || '')} · ${fmtD(l.at).slice(0, 5)}</div></span></div>`).join('') : '<div class="muted">ยังไม่มีการบันทึกตารางเรือ</div>'}</div></div>
     </div>`;
   }
   if (k === 3) {
     const svc = A.settings.services;
-    return `<div class="stack"><div class="card"><div class="card-h"><h3>เรื่องที่ได้รับแต่งตั้งจาก Owner</h3></div><div class="card-b"><div class="svc">${svc.map(s => `<button type="button" data-act="o-svc" data-svc="${esc(s)}" aria-pressed="${j.services.includes(s)}" ${closed() ? 'disabled' : ''}>${j.services.includes(s) ? icon('check') : ''}${esc(s)}</button>`).join('')}</div></div></div>
+    return `<div class="stack"><div class="card"><div class="card-h"><h2>เรื่องที่ได้รับแต่งตั้งจาก Owner</h2></div><div class="card-b"><div class="svc">${svc.map(s => `<button type="button" data-act="o-svc" data-svc="${esc(s)}" aria-pressed="${j.services.includes(s)}" ${closed() ? 'disabled' : ''}>${j.services.includes(s) ? icon('check') : ''}${esc(s)}</button>`).join('')}</div></div></div>
       ${mailCard('ร่างอีเมลแจ้ง Local Agent', 'appoint', 'appoint')}</div>`;
   }
   if (k === 4) {
     const on = crew.filter(c => c.type === 'on');
     const left = j.imm_deadline ? (j.imm_deadline - now) / MIN : null;
-    const color = left == null ? 'var(--muted)' : left < 0 ? 'var(--red)' : left < 360 ? 'var(--amber)' : 'var(--green)';
+    const color = left == null ? 'var(--muted)' : left < 0 ? 'var(--red)' : left <= 1440 ? 'var(--amber)' : 'var(--green)';
     const rows = on.map(c => {
       const miss = missingDocs(c, A.settings.docs).length > 0;
-      const cell = (key, yes, no) => miss && key === 'oktb' && !c.s4.oktb ? pill('gray', 'รอเอกสารครบ') : `<button class="doc ${c.s4[key] ? 'ok' : 'late'}" data-act="o-s4" data-id="${c.id}" data-key="${key}" type="button" ${closed() ? 'disabled' : ''}>${c.s4[key] ? icon('check') + yes : icon('x') + no}</button>`;
-      return `<tr class="${!c.s4.imm ? 'warnrow' : ''}"><td><div class="who2">${avatar(c)}<div><div class="nm">${esc(c.name)}</div><div class="sub">${esc(c.flight || '—')} · ถึง ${c.cps[0] && c.cps[0].plan ? dhm(c.cps[0].plan) : 'ยังไม่มีแผน'}</div></div></div></td><td>${cell('oktb', 'ออกแล้ว', 'ยังไม่ออก')}</td><td>${cell('meet', 'ส่งแล้ว', 'ยังไม่ส่ง')}</td><td>${cell('imm', 'ยื่นแล้ว', 'ยังไม่ยื่น')}</td></tr>`;
+      const cell = (key, yes, no) => key === 'imm' ? `<button class="doc ${submissionRecorded(c) ? 'ok' : 'late'}" data-act="o-s4" data-id="${c.id}" data-key="imm" type="button">${submissionRecorded(c) ? 'บันทึกยื่นแล้ว' : c.s4.imm ? 'ประวัติเดิม — ตรวจชุดเอกสาร' : no}</button>` : miss && key === 'oktb' && !c.s4.oktb ? pill('gray', 'รอเอกสารครบ') : `<button class="doc ${c.s4[key] ? 'ok' : 'late'}" data-act="o-s4" data-id="${c.id}" data-key="${key}" type="button" ${closed() ? 'disabled' : ''}>${c.s4[key] ? icon('check') + yes : icon('x') + no}</button>`;
+      return `<tr class="${!submissionRecorded(c) ? 'warnrow' : ''}"><td><div class="who2">${avatar(c)}<div><div class="nm">${esc(c.name)}</div><div class="sub">${esc(c.flight || '—')} · ถึง ${c.cps[0] && c.cps[0].plan ? dhm(c.cps[0].plan) : 'ยังไม่มีแผน'}</div></div></div></td><td>${cell('oktb', 'ออกแล้ว', 'ยังไม่ออก')}</td><td>${cell('meet', 'ส่งแล้ว', 'ยังไม่ส่ง')}</td><td>${cell('imm', 'ยื่นแล้ว', 'ยังไม่ยื่น')}</td></tr>`;
     }).join('');
     return `${hint('ลูกเรือที่เอกสารยังไม่ครบ ระบบยังไม่ให้บันทึกว่าออก OKTB · ตัวเอกสาร OK TO BOARD สร้างได้จากการ์ดด้านล่าง')}<div class="stack">
-      <div class="card"><div class="card-h"><h3>OKTB และเอกสาร ตม. สนามบิน</h3><span class="sub">On signer ${on.length} คน</span></div>${on.length ? `<div class="scroll"><table class="t"><thead><tr><th>ลูกเรือ</th><th>OKTB</th><th>Meeting point</th><th>ตม. สนามบิน</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="card-b muted">ยังไม่มี On signer</div>'}</div>
-      <div class="card"><div class="card-h"><h3>เอกสาร OK TO BOARD สำหรับ ตม. สนามบิน</h3></div><div class="card-b">
-        <div class="muted s14" style="margin-bottom:12px">ได้ PDF ไฟล์เดียวพร้อมยื่น: จดหมาย OK TO BOARD ตามด้วยสำเนาพาสปอร์ต Seaman book และตั๋วเครื่องบิน ที่แนบไว้ในปุ่ม "ไฟล์เอกสาร" ของ<a href="/jobs/${j.id}/1" data-link>ขั้นตอนที่ 1</a></div>
+      <div class="card"><div class="card-h"><h2>OKTB และเอกสาร ตม. สนามบิน</h2><span class="sub">On signer ${on.length} คน</span></div>${on.length ? `<div class="scroll"><table class="t"><thead><tr><th>ลูกเรือ</th><th>OKTB</th><th>Meeting point</th><th>ตม. สนามบิน</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="card-b muted">ยังไม่มี On signer</div>'}</div>
+      <div class="card"><div class="card-h"><h2>เอกสาร OK TO BOARD สำหรับ ตม. สนามบิน</h2></div><div class="card-b">
+        <div class="muted s14" style="margin-bottom:12px">รวม PDF ไฟล์เดียว: จดหมาย OK TO BOARD ตามด้วยสำเนาพาสปอร์ต Seaman book และตั๋วเครื่องบิน ที่แนบไว้ในปุ่ม "ไฟล์เอกสาร" ของ<a href="/jobs/${j.id}/1" data-link>ขั้นตอนที่ 1</a> ตรวจความครบถ้วนก่อนส่ง การสร้าง PDF ไม่ใช่หลักฐานว่าสายการบินหรือ ตม. รับเอกสารหรืออนุมัติแล้ว</div>
         <div class="row"><button class="btn" data-act="o-oktb" type="button" ${on.length ? '' : 'disabled'}>${icon('note')}สร้างเอกสาร OK TO BOARD</button>${on.length ? '' : `<span class="muted s13">ยังไม่มี On signer เพิ่มได้ที่ <a href="/jobs/${j.id}/1" data-link>ขั้นตอนที่ 1</a></span>`}</div>
       </div></div>
-      <div class="card"><div class="card-h"><h3>กำหนดยื่นเอกสาร ตม.</h3></div><div class="card-b">
+      <div class="card"><div class="card-h"><h2>กำหนดยื่นเอกสาร ตม.</h2></div><div class="card-b">
         <div class="muted s14">${j.imm_deadline ? fmtFull(j.imm_deadline) : 'ยังไม่ได้ตั้งกำหนด'}</div>
         <div class="big-num" style="color:${color}">${left == null ? '—' : left < 0 ? 'เกินกำหนด ' + dur(-left) : 'อีก ' + dur(left)}</div>
         ${left != null ? `<div class="bar" style="margin:12px 0"><i style="width:${Math.max(4, Math.min(100, 100 - left / 7.2))}%;background:${color}"></i></div>` : ''}
         ${closed() ? '' : `<form class="row" id="immf" style="margin-top:10px"><input type="datetime-local" name="imm" value="${toInput(j.imm_deadline)}" aria-label="กำหนดยื่นเอกสาร ตม." style="flex:1;min-width:0"><button class="btn line" type="submit">บันทึก</button></form>`}
-        <div class="muted s13" style="margin-top:8px">ระบบเตือนบนแดชบอร์ดล่วงหน้า <span class="nw">6 ชั่วโมง</span> และเมื่อ<span class="nw">เกินเวลา</span></div>
+        <div class="muted s13" style="margin-top:8px">ระบบเตือนบนแดชบอร์ดล่วงหน้า <span class="nw">24 ชั่วโมง</span>, <span class="nw">6 ชั่วโมง</span> และเมื่อ<span class="nw">เกินเวลา</span> สถานะยื่นเอกสารเป็นการบันทึกของสำนักงาน ต้องตรวจหลักฐานตอบรับและอนุมัติแยกกัน</div>
       </div></div>
     </div>`;
   }
@@ -181,7 +182,8 @@ function body(k, now) {
       if (!list.length) return '';
       const n = Math.max(...list.map(c => c.cps.length));
       const rows = Array.from({ length: n }, (_, jx) => `<tr><td>${esc((list.find(c => c.cps[jx]) || {}).cps[jx].name)}</td>${list.map(c => { const x = c.cps[jx]; if (!x) return '<td></td>'; const lt = x.actual != null && x.plan != null && (x.actual - x.plan) / MIN > late(); return `<td>${x.actual != null ? `<b>${dhm(x.actual)}</b>${lt ? ` <span class="pill late" style="margin-left:4px">ช้า ${Math.round((x.actual - x.plan) / MIN)} น.</span>` : ''}` : `<span class="sub">${planCell(c, jx, late())}</span>`}</td>`; }).join('')}</tr>`).join('');
-      return `<div class="scroll"><table class="t nw"><thead><tr><th>จุด</th>${list.map(c => `<th><button class="linkbtn" type="button" data-act="o-plan" data-id="${c.id}" ${closed() ? 'disabled' : ''}>${esc(c.name.split(' ')[0])}${closed() ? '' : icon('edit')}</button></th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+      const why = list.map(c => [c, shiftNote(c, late())]).filter(x => x[1]);
+      return `<div class="scroll"><table class="t nw"><thead><tr><th>จุด</th>${list.map(c => `<th><button class="linkbtn" type="button" data-act="o-plan" data-id="${c.id}" ${closed() ? 'disabled' : ''}>${esc(c.name.split(' ')[0])}${closed() ? '' : icon('edit')}</button></th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>${why.length ? `<div class="card-b fcnotes">${why.map(([c, t]) => `<div><b>${esc(c.name)}</b> ${esc(t)}</div>`).join('')}</div>` : ''}`;
     };
     const on = crew.filter(c => c.type === 'on'), off = crew.filter(c => c.type === 'off');
     const firstOn = on.map(c => c.cps[0] && c.cps[0].plan).filter(Boolean);
@@ -189,15 +191,16 @@ function body(k, now) {
     const noplan = crew.filter(c => c.cps.some(x => x.plan == null));
     return `${hint('กดชื่อลูกเรือที่หัวตารางเพื่อใส่ / แก้เวลาตามแผน · เวลาจริงมาจากพนักงานที่กดยืนยันในมือถือ')}<div class="stack">
       ${noplan.length ? `<div class="card card-b warnbox">${icon('alert')}<span>ยังไม่ได้ใส่เวลาตามแผน: ${noplan.map(c => `<button class="linkbtn" type="button" data-act="o-plan" data-id="${c.id}">${esc(c.name)}</button>`).join(', ')}</span></div>` : ''}
-      ${on.length ? `<div class="card"><div class="card-h"><h3>แผนเทียบเวลาจริง</h3><span class="sub">On signer</span></div>${table(on)}</div>` : ''}
-      ${off.length ? `<div class="card"><div class="card-h"><h3>แผนเทียบเวลาจริง</h3><span class="sub">Off signer</span></div>${table(off)}</div>` : ''}
+      ${on.length ? `<div class="card"><div class="card-h"><h2>แผนเทียบเวลาจริง</h2><span class="sub">On signer</span></div>${table(on)}</div>` : ''}
+      ${off.length ? `<div class="card"><div class="card-h"><h2>แผนเทียบเวลาจริง</h2><span class="sub">Off signer</span></div>${table(off)}</div>` : ''}
       <div class="card kpis kpi2"><div><span>On signer เครื่องลงคนแรก</span><b style="font-size:20px">${firstOn.length ? fmtD(Math.min(...firstOn)) : '—'}</b></div><div><span>Off signer บินกลับคนสุดท้าย</span><b style="font-size:20px">${lastOff.length ? fmtD(Math.max(...lastOff)) : '—'}</b></div></div>
       ${mailCard('ร่างอีเมลแผนส่ง Owner / กัปตัน', 'plan', 'plan')}
     </div>`;
   }
   if (k === 6) {
-    const agents = crew.filter(c => c.agent_id).length, vans = crew.filter(c => c.vehicle_id).length;
-    return `${crew.length && (agents < crew.length || vans < crew.length) ? hint(`ลูกเรือบางคนยังไม่มีผู้ดูแลหรือรถ รายชื่อในอีเมลจะไม่ครบ · จัดได้ที่ <a href="/jobs/${j.id}/7" data-link>ขั้นตอนที่ 7</a>`) : ''}${mailCard('ร่างอีเมล GATE PERMISSION', 'gate', 'gate')}`;
+    const missing = crew.filter(c => !c.agent_id || !c.vehicle_id);
+    const details = missing.map(c => `<li data-gate-missing="${esc(c.id)}">${esc(c.name)} — ยังขาด${[!c.agent_id && 'ผู้ดูแล', !c.vehicle_id && 'รถ'].filter(Boolean).join('และ')}</li>`).join('');
+    return `${missing.length ? hint(`ลูกเรือบางคนยังไม่มีผู้ดูแลหรือรถ รายชื่อในอีเมลจะไม่ครบ<ul>${details}</ul>จัดได้ที่ <a href="/jobs/${j.id}/7" data-link>ขั้นตอนที่ 7</a>`) : ''}${mailCard('ร่างอีเมล GATE PERMISSION', 'gate', 'gate')}`;
   }
   if (k === 7) {
     if (!crew.length) return noCrew();
@@ -205,13 +208,24 @@ function body(k, now) {
     const hot = A.hotels.filter(h => h.active || crew.some(c => c.hotel_id === h.id));
     const agents = A.users.filter(u => u.role === 'field' && (u.active || crew.some(c => c.agent_id === u.id)));
     const dis = closed() ? 'disabled' : '';
+    const driver = c => {
+      const v = A.vehicle(c.vehicle_id);
+      if (!v) return '';
+      const linked = A.users.find(u => u.id === v.user_id && u.active && u.role === 'field');
+      const cur = c.driver_id ? A.user(c.driver_id) : null;
+      const act = (label, to) => closed() ? '' : `<button class="btn line sm" type="button" data-act="o-driver" data-id="${c.id}" data-to="${to || ''}">${esc(label)}</button>`;
+      if (cur && !cur.active) return `<div class="dhint warn">บัญชีคนขับ ${esc(cur.name)} ถูกปิดแล้ว จะไม่เห็นลูกเรือในมือถือ</div>${linked ? act('เปลี่ยนเป็น ' + linked.name, linked.id) : act('เอาคนขับออก', 0)}`;
+      if (linked && c.driver_id !== linked.id) return `<div class="dhint warn">คนขับของรถคันนี้เปลี่ยนเป็น ${esc(linked.name)} แล้ว${cur ? ` · ตอนนี้ ${esc(cur.name)} ยังเห็นลูกเรือคนนี้` : ''}</div>${act('ให้ ' + linked.name + ' เห็นลูกเรือคนนี้', linked.id)}`;
+      if (!linked && cur) return `<div class="dhint warn">รถคันนี้ไม่มีบัญชีคนขับแล้ว แต่ ${esc(cur.name)} ยังเห็นลูกเรือคนนี้</div>${act('เอาคนขับออก', 0)}`;
+      return linked ? `<div class="dhint">คนขับในมือถือ: ${esc(linked.name)}</div>` : '<div class="dhint">คนขับยังไม่มีบัญชี จะไม่เห็นลูกเรือในมือถือ</div>';
+    };
     const rows = crew.map(c => { const bad = !c.hotel_id || !c.vehicle_id || !c.agent_id; return `<tr class="${bad ? 'warnrow' : ''}"><td><div class="who2">${avatar(c)}<div><div class="nm">${esc(c.name)}</div><div class="sub">${c.type === 'on' ? 'On signer' : 'Off signer'}</div></div></div></td>
-      <td><select data-chg="o-set" data-id="${c.id}" data-f="vehicle_id" aria-label="รถ" ${dis}><option value="">ยังไม่จัดรถ</option>${veh.map(v => `<option value="${v.id}" ${c.vehicle_id === v.id ? 'selected' : ''}>${esc(v.name + (v.driver ? ' (' + v.driver + ')' : ''))}</option>`).join('')}</select></td>
+      <td><select data-chg="o-set" data-id="${c.id}" data-f="vehicle_id" aria-label="รถ" ${dis}><option value="">ยังไม่จัดรถ</option>${veh.map(v => `<option value="${v.id}" ${c.vehicle_id === v.id ? 'selected' : ''}>${esc(v.name + (v.driver ? ' (' + v.driver + ')' : ''))}</option>`).join('')}</select>${driver(c)}</td>
       <td><select data-chg="o-set" data-id="${c.id}" data-f="hotel_id" aria-label="โรงแรม" ${dis}><option value="">ยังไม่จอง</option>${hot.map(h => `<option value="${h.id}" ${c.hotel_id === h.id ? 'selected' : ''}>${esc(h.name)}</option>`).join('')}</select></td>
       <td><input type="text" data-chg="o-set" data-id="${c.id}" data-f="room" value="${esc(c.room)}" size="4" maxlength="20" placeholder="ห้อง" aria-label="เลขห้อง" ${dis}></td>
       <td><select data-chg="o-set" data-id="${c.id}" data-f="agent_id" aria-label="ผู้ดูแล" ${dis}><option value="">ยังไม่มอบหมาย</option>${agents.map(u => `<option value="${u.id}" ${c.agent_id === u.id ? 'selected' : ''}>${esc(u.name)}${u.emp_code ? ' · ' + esc(u.emp_code) : ''}</option>`).join('')}</select></td>
       <td>${bad ? pill('warn-c', 'ยังไม่ครบ') : pill('ok', 'ครบ')}</td></tr>`; }).join('');
-    return `${hint('เลือกแล้วบันทึกทันที · ลูกเรือจะไปขึ้นในมือถือของพนักงานผู้ดูแลคนนั้น')}<div class="stack"><div class="card"><div class="card-h"><h3>รถ คนขับ โรงแรม และผู้ดูแล</h3>${closed() ? '' : `<div class="act"><button class="btn line sm" data-act="o-addres" data-kind="vehicles" type="button">${icon('plus')}เพิ่มรถ</button><button class="btn line sm" data-act="o-addres" data-kind="hotels" type="button">${icon('plus')}เพิ่มโรงแรม</button></div>`}</div><div class="scroll"><table class="t nw tight"><thead><tr><th>ลูกเรือ</th><th>รถ / คนขับ</th><th>โรงแรม</th><th>ห้อง</th><th>ผู้ดูแล (มือถือ)</th><th>สถานะ</th></tr></thead><tbody>${rows}</tbody></table></div></div>
+    return `${hint(`เลือกแล้วบันทึกทันที · ลูกเรือจะไปขึ้นในมือถือของพนักงานผู้ดูแลคนนั้น และของคนขับที่มีบัญชีเชื่อมกับรถ${A.isAdmin() ? ' (เชื่อมบัญชีคนขับได้ที่ <a href="/admin/vehicles" data-link>ตั้งค่า &gt; รถและคนขับ</a>)' : ' (ผู้ดูแลระบบเชื่อมบัญชีคนขับได้ที่ ตั้งค่า &gt; รถและคนขับ)'}`)}<div class="stack"><div class="card"><div class="card-h"><h2>รถ คนขับ โรงแรม และผู้ดูแล</h2><a href="/jobs/${j.id}/packets" data-link>ประวัติการมอบหมายรายคน</a>${closed() ? '' : `<div class="act"><button class="btn line sm" data-act="o-addres" data-kind="vehicles" type="button">${icon('plus')}เพิ่มรถ</button><button class="btn line sm" data-act="o-addres" data-kind="hotels" type="button">${icon('plus')}เพิ่มโรงแรม</button></div>`}</div><div class="scroll"><table class="t nw tight"><thead><tr><th>ลูกเรือ</th><th>รถ / คนขับ</th><th>โรงแรม</th><th>ห้อง</th><th>ผู้ดูแล (มือถือ)</th><th>สถานะ</th></tr></thead><tbody>${rows}</tbody></table></div></div>
       ${agents.length ? '' : `<div class="card card-b warnbox">${icon('alert')}<span>ยังไม่มีบัญชีพนักงานภาคสนาม ${A.isAdmin() ? '<a href="/admin/users" data-link>เพิ่มผู้ใช้</a>' : 'แจ้งผู้ดูแลระบบให้เพิ่มผู้ใช้'}</span></div>`}</div>`;
   }
   if (k === 8) {
@@ -219,27 +233,39 @@ function body(k, now) {
     const moving = crew.filter(c => nextIdx(c) > 0).length;
     const nLate = sts.filter(s => s.k === 'late').length, soon = sts.filter(s => s.k === 'soon').length;
     const prep = prepItems(j, crew, now, ctx());
+    const cap = (c, p) => { const by = A.user(p.by); return esc(`${c.name} · ${p.point} · ถ่าย ${fmtD(p.at)}${lagged(p.at, p.received) ? ` · ถึงระบบ ${fmtD(p.received)} (ออฟไลน์)` : ''} · ${gpsText(p)}${by ? ' · โดย ' + by.name : ''}`); };
+    const thumb = (c, p, small) => `<button type="button" ${small ? 'class="pth" ' : ''}data-act="o-photo" data-src="/api/photos/${p.id}" data-cap="${cap(c, p)}" title="กดเพื่อดูรูปเต็มจอ"><img src="/api/photos/${p.id}" alt="รูปประกอบ ${esc(p.point)} ของ ${esc(c.name)}" loading="lazy">${small ? '' : `<span>${esc(p.point)} ${hm(p.at)}</span>`}</button>`;
+    const cpBox = (c, x) => {
+      const ph = cpPhotos(c, x.idx), by = x.actual != null ? A.user(x.by) : null;
+      const photo = ph.length ? `<div class="cpe"><span class="tag full">มีรูป ${ph.length}</span>${ph.map(p => thumb(c, p, true)).join('')}</div>` : photoDue(c, x) ? '<div class="cpe"><span class="tag due">รูปค้าง</span></div>' : x.need_photo && x.actual == null ? '<div class="sub">ต้องถ่ายรูป</div>' : '';
+      return `<div class="${x.actual != null ? 'done' : ''}"><b>${esc(x.name)}</b><br><span class="sub">แผน ${dhm(x.plan)} · จริง ${dhm(x.actual)}</span>
+        ${by ? `<div class="sub">ยืนยันโดย ${esc(by.name)}${CAPACITY[x.role] ? ` (${CAPACITY[x.role]})` : ''}</div>` : ''}
+        ${lagged(x.actual, x.received) ? `<div class="sub">บันทึกบนเครื่อง ${dhm(x.actual)} · ถึงระบบ ${dhm(x.received)} (ออฟไลน์)</div>` : ''}
+        ${photo}${x.skip ? `<div class="sub">เหตุผลที่ยืนยันโดยไม่มีรูป: ${esc(x.skip)}</div>` : ''}</div>`;
+    };
     const rows = crew.map((c, i) => {
-      const st = sts[i], n = nextIdx(c);
-      const ex = A.ui.expand === c.id ? `<tr><td colspan="4" class="exp"><div class="mini">${c.cps.map((x, jx) => `<div class="${x.actual != null ? 'done' : ''}"><b>${esc(x.name)}</b><br><span class="sub">แผน ${dhm(x.plan)} · จริง ${dhm(x.actual)}</span></div>`).join('')}</div>${c.notes.length ? `<div class="s14" style="margin-top:8px">${c.notes.map(x => `<div><span class="muted">${hm(x.at)}</span> ${esc(x.text)}</div>`).join('')}</div>` : ''}${c.photos.length ? `<div class="pgrid pg6" style="margin-top:8px">${c.photos.map(p => `<button type="button" data-act="o-photo" data-src="/api/photos/${p.id}" data-cap="${esc(c.name + ' · ' + p.point + ' · ' + fmtD(p.at))}"><img src="/api/photos/${p.id}" alt="" loading="lazy"><span>${esc(p.point)} ${hm(p.at)}</span></button>`).join('')}</div>` : ''}</td></tr>` : '';
+      const st = sts[i], n = nextIdx(c), ev = evidence(c);
+      const loose = c.photos.filter(p => !c.cps.some(x => x.idx === p.cp_idx));
+      const ex = A.ui.expand === c.id ? `<tr><td colspan="5" class="exp"><div class="exp-in"><div class="mini">${c.cps.map(x => cpBox(c, x)).join('')}</div>${c.notes.length ? `<div class="s14" style="margin-top:8px">${c.notes.map(x => `<div><span class="muted">${hm(x.at)}</span> ${esc(x.text)}</div>`).join('')}</div>` : ''}${loose.length ? `<div class="sub" style="margin-top:8px">รูปที่ไม่ได้ผูกกับจุดสถานะ</div><div class="pgrid pg6" style="margin-top:4px">${loose.map(p => thumb(c, p)).join('')}</div>` : ''}</div></td></tr>` : '';
       const u = A.user(c.agent_id);
-      return `<tr class="click ${st.k === 'late' ? 'bad' : ''}" data-act="o-expand" data-id="${c.id}"><td><div class="who2">${avatar(c)}<div><div class="nm">${esc(c.name)}</div><div class="sub">${esc(c.rank || '—')} · ดูแลโดย ${esc(u ? u.name : '-')}</div></div></div></td><td>${esc(current(c))}<div class="sub">${lastTime(c) ? hm(lastTime(c)) : '—'}</div></td><td>${n === -1 ? '—' : esc(c.cps[n].name) + '<div class="sub">' + planCell(c, n, late()) + '</div>'}</td><td>${pill(st.cls, st.label)}</td></tr>${ex}`;
+      const why = n === -1 ? '' : forecastWhy(c, n, late());
+      return `<tr class="click ${st.k === 'late' ? 'bad' : ''}" data-act="o-expand" data-id="${c.id}" tabindex="0" aria-expanded="${A.ui.expand === c.id}" title="กดเพื่อดูรายละเอียด รูป และหมายเหตุ"><td><div class="who2">${avatar(c)}<div><div class="nm">${esc(c.name)}</div><div class="sub">${esc(c.rank || '—')} · ดูแลโดย ${esc(u ? u.name : '-')}</div>${ev.need ? `<div><span class="tag ${ev.have < ev.need ? 'due' : 'full'} xs-only">รูป ${ev.have}/${ev.need}</span></div>` : ''}</div></div></td><td>${esc(current(c))}<div class="sub">${lastTime(c) ? hm(lastTime(c)) : '—'}</div></td><td>${n === -1 ? '—' : esc(c.cps[n].name) + '<div class="sub">' + planCell(c, n, late()) + '</div>' + (why ? `<div class="sub fwhy">= ${esc(why)}</div>` : '')}</td><td class="xs-hide">${ev.need ? `<span class="tag ${ev.have < ev.need ? 'due' : 'full'}">รูป ${ev.have}/${ev.need}</span>` : ''}</td><td>${pill(st.cls, st.label)}</td></tr>${ex}`;
     }).join('');
     const link = `${location.origin}/t/${j.owner_token}`;
     const tpl = A.ui.tpl || 'night';
     return `<div class="card kpis"><div><span>ลูกเรือในงานนี้</span><b>${crew.length}</b></div><div><span>กำลังเดินทาง</span><b>${moving}</b></div><div><span>ช้ากว่าแผน</span><b style="color:${nLate ? 'var(--red)' : 'var(--ink)'}">${nLate}</b></div><div><span>เตรียมภายใน 1 ชม.</span><b style="color:${soon ? 'var(--amber)' : 'var(--ink)'}">${soon}</b></div></div>
-    ${crew.length ? `<div class="card" style="margin-bottom:16px"><div class="card-h"><h3>สถานะลูกเรือ</h3>${pill('ok', 'อัปเดต ' + hm(J.now))}<span class="sub">กดแถวเพื่อดูรายละเอียด รูป และหมายเหตุ</span></div><div class="scroll"><table class="t nw"><thead><tr><th>ลูกเรือ</th><th>จุดล่าสุด</th><th>จุดถัดไป</th><th>สถานะ</th></tr></thead><tbody>${rows}</tbody></table></div></div>` : noCrew()}
+    ${crew.length ? `<div class="card" style="margin-bottom:16px"><div class="card-h"><h2>สถานะลูกเรือ</h2>${pill('ok', 'อัปเดต ' + hm(J.now))}<span class="sub">กดแถวเพื่อดูรายละเอียด รูป และหมายเหตุ</span></div><div class="scroll"><table class="t nw"><thead><tr><th>ลูกเรือ</th><th>จุดล่าสุด</th><th>จุดถัดไป</th><th class="xs-hide" title="จุดที่ต้องถ่ายรูปและยืนยันแล้ว: มีรูปกี่จุดจากกี่จุด">รูปประกอบ</th><th>สถานะ</th></tr></thead><tbody>${rows}</tbody></table></div></div>` : noCrew()}
     <div class="cols"><div class="stack">
-      <div class="card"><div class="card-h"><h3>ต้องเตรียมตอนนี้</h3><span class="sub">${prep.length} รายการ</span></div><div class="card-b tight-y">${prep.length ? prep.map(p => `<div class="prep">${pill(p.cls, p.tag)}<span>${glue(p.text)}</span></div>`).join('') : '<div class="muted pad-y">ยังไม่มีอะไรต้องเตรียม</div>'}</div></div>
-      <div class="card"><div class="card-h"><h3>อีเมลอัปเดต Owner</h3><span class="sub">${sentLine('owner')}</span><div class="act"><select data-chg="o-tpl" aria-label="เลือกข้อความ"><option value="night" ${tpl === 'night' ? 'selected' : ''}>สรุปแผนคืนนี้</option><option value="morning" ${tpl === 'morning' ? 'selected' : ''}>สรุปผลเช้านี้</option><option value="update" ${tpl === 'update' ? 'selected' : ''}>อัปเดตสถานะตอนนี้</option></select><button class="btn" data-act="o-copymail" type="button">${icon('copy')}คัดลอก</button>${closed() ? '' : `<button class="btn line" data-act="o-sent" data-key="owner" type="button">${icon('send')}บันทึกว่าส่งแล้ว</button>`}</div></div>
+      <div class="card"><div class="card-h"><h2>ต้องเตรียมตอนนี้</h2><span class="sub">${prep.length} รายการ</span></div><div class="card-b tight-y">${prep.length ? prep.map(p => `<div class="prep">${pill(p.cls, p.tag)}<span>${glue(p.text)}</span></div>`).join('') : '<div class="muted pad-y">ยังไม่มีอะไรต้องเตรียม</div>'}</div></div>
+      <div class="card"><div class="card-h"><h2>อีเมลอัปเดต Owner</h2><span class="sub">${sentLine('owner')}</span><div class="act"><select data-chg="o-tpl" aria-label="เลือกข้อความ"><option value="night" ${tpl === 'night' ? 'selected' : ''}>สรุปแผนคืนนี้</option><option value="morning" ${tpl === 'morning' ? 'selected' : ''}>สรุปผลเช้านี้</option><option value="update" ${tpl === 'update' ? 'selected' : ''}>อัปเดตสถานะตอนนี้</option></select><button class="btn" data-act="o-copymail" type="button">${icon('copy')}คัดลอก</button>${closed() ? '' : `<button class="btn line" data-act="o-sent" data-key="owner" type="button">${icon('send')}บันทึกว่าส่งแล้ว</button>`}</div></div>
         <div class="card-b"><textarea class="mail" id="mailtext" spellcheck="false" style="min-height:240px">${esc(mail(tpl, j, crew, ctx()))}</textarea></div></div>
     </div><div class="stack">
-      <div class="card"><div class="card-h"><h3>ลิงก์ติดตามสำหรับ Owner</h3></div><div class="card-b">
+      <div class="card"><div class="card-h"><h2>ลิงก์ติดตามสำหรับ Owner</h2></div><div class="card-b">
         <div class="linkbox"><code>${esc(link)}</code></div>
         <div class="row" style="margin-top:10px"><button class="btn" data-act="o-copylink" data-link="${esc(link)}" type="button">${icon('copy')}คัดลอกลิงก์</button><a class="btn line" href="${esc(link)}" target="_blank" rel="noopener">${icon('eye')}เปิดดู</a>${closed() ? '' : `<button class="btn line" data-act="o-newtoken" type="button">${icon('refresh')}สร้างลิงก์ใหม่</button>`}</div>
         <div class="muted s13" style="margin-top:8px">Owner เปิดดูได้อย่างเดียว ไม่ต้องสมัครบัญชี ไม่เห็นเลขพาสปอร์ต หมายเหตุ และรูป · กด "สร้างลิงก์ใหม่" ลิงก์เดิมจะใช้ไม่ได้ทันที</div>
       </div></div>
-      <div class="card"><div class="card-h"><h3>ความเคลื่อนไหวล่าสุด</h3></div><div class="card-b feed tight-y">${J.activity.slice(0, 25).map(l => `<div><span class="tm">${hm(l.at)}</span><span>${esc(l.text)}<div class="sub">${esc(l.who || '')}${J.now - l.at > 20 * 3600000 ? ' · ' + fmtD(l.at).slice(0, 5) : ''}</div></span></div>`).join('') || '<div class="muted">ยังไม่มีความเคลื่อนไหว</div>'}</div></div>
+      <div class="card"><div class="card-h"><h2>ความเคลื่อนไหวล่าสุด</h2></div><div class="card-b feed tight-y">${J.activity.slice(0, 25).map(l => `<div><span class="tm">${hm(l.at)}</span><span>${esc(l.text)}<div class="sub">${esc(l.who || '')}${J.now - l.at > 20 * 3600000 ? ' · ' + fmtD(l.at).slice(0, 5) : ''}</div></span></div>`).join('') || '<div class="muted">ยังไม่มีความเคลื่อนไหว</div>'}</div></div>
     </div></div>`;
   }
   if (k === 9) {
@@ -252,9 +278,9 @@ function body(k, now) {
     return `<div class="stack">
       <div class="card kpis"><div><span>ลูกเรือ (On ${on} / Off ${off})</span><b>${crew.length}</b></div><div><span>รถที่ใช้</span><b>${vans}</b></div><div><span>ห้องพัก</span><b>${rooms}</b></div><div><span>จุดที่ช้ากว่าแผน</span><b>${nLate}</b></div></div>
       ${pending && !closed() ? `<div class="card card-b warnbox">${icon('alert')}<span>ลูกเรือ ${pending} คนยังไม่ครบทุกจุด ตรวจก่อนปิดงาน</span></div>` : ''}
-      <div class="card"><div class="card-h"><h3>Time log · ${esc(j.vessel)}</h3><div class="act"><a class="btn" href="/api/jobs/${j.id}/export.xlsx" download>${icon('download')}ดาวน์โหลด Excel</a><a class="btn line" href="/jobs/${j.id}/report" target="_blank" rel="noopener">${icon('print')}พิมพ์ / บันทึก PDF</a></div></div>
+      <div class="card"><div class="card-h"><h2>Time log · ${esc(j.vessel)}</h2><div class="act"><a class="btn" href="/api/jobs/${j.id}/export.xlsx" download>${icon('download')}ดาวน์โหลด Excel</a><a class="btn line" href="/jobs/${j.id}/report" target="_blank" rel="noopener">${icon('print')}พิมพ์ / บันทึก PDF</a></div></div>
         ${crew.length ? `<div class="scroll"><table class="t nw"><thead><tr><th>ลูกเรือ</th><th>จุด</th><th>แผน</th><th>เวลาจริง</th><th>ผล</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="card-b muted">ยังไม่มีลูกเรือ</div>'}</div>
-      <div class="card"><div class="card-h"><h3>${closed() ? 'งานนี้ปิดแล้ว' : 'ปิดงาน'}</h3></div><div class="card-b">
+      <div class="card"><div class="card-h"><h2>${closed() ? 'งานนี้ปิดแล้ว' : 'ปิดงาน'}</h2></div><div class="card-b">
         <div class="muted s14" style="margin-bottom:12px">${closed() ? `ปิดงานเมื่อ ${fmtFull(j.closed_at)} · ข้อมูลทั้งหมดยังดูและดาวน์โหลดได้ตลอด` : 'ปิดงานเมื่อส่งสรุปให้ฝ่ายบัญชีแล้ว งานจะย้ายไปแท็บ "ปิดแล้ว" และพนักงานภาคสนามจะไม่เห็นลูกเรือของงานนี้อีก'}</div>
         <div class="row">${closed() ? `<button class="btn line" data-act="o-reopen" type="button">${icon('refresh')}เปิดงานอีกครั้ง</button>` : `<button class="btn" data-act="o-close" type="button">${icon('check')}ปิดงาน</button>`}${A.isAdmin() ? `<button class="btn line danger" data-act="o-deljob" type="button">${icon('trash')}ลบงานนี้ถาวร</button>` : ''}</div>
       </div></div>
@@ -315,7 +341,7 @@ const nKind = (c, kind) => (c.files || []).filter(f => f.kind === kind).length;
 function filesBody(c, note = {}) {
   return FILE_KINDS.map(([k, l]) => {
     const list = (c.files || []).filter(f => f.kind === k);
-    return `<section class="fgroup"><div class="fg-h"><b>${l}</b><span class="sub">${list.length ? list.length + ' ไฟล์' : 'ยังไม่มีไฟล์'}</span>${closed() ? '' : `<label class="btn line sm">${icon('plus')}เพิ่มไฟล์<input type="file" accept="image/*,application/pdf" multiple data-chg="o-upfile" data-id="${c.id}" data-kind="${k}" hidden></label>`}</div>
+    return `<section class="fgroup"><div class="fg-h"><b>${l}</b><span class="sub">${list.length ? list.length + ' ไฟล์' : 'ยังไม่มีไฟล์'}</span>${closed() ? '' : `<label class="btn line sm">${icon('plus')}เพิ่มไฟล์<input class="vh" type="file" accept="image/*,application/pdf" multiple data-chg="o-upfile" data-id="${c.id}" data-kind="${k}" aria-label="เพิ่มไฟล์ ${l}"></label>`}</div>
       ${list.map(f => `<div class="frow"><a class="fname" href="/api/files/${f.id}" target="_blank" rel="noopener" title="เปิดดูในแท็บใหม่">${icon(f.mime === 'application/pdf' ? 'note' : 'image')}<span>${esc(f.name)}</span></a><span class="sub">${fileSize(f.size)}</span>${closed() ? '' : `<button class="iconbtn" type="button" data-act="o-delfile" data-id="${f.id}" data-crew="${c.id}" data-kind="${k}" data-name="${esc(f.name)}" title="ลบไฟล์" aria-label="ลบไฟล์ ${esc(f.name)}">${icon('trash')}</button>`}</div>`).join('')}
       <div class="fstat" role="status">${note.kind === k && note.ok ? esc(note.ok) : ''}</div><div class="ferr" role="alert">${note.kind === k && note.bad ? note.bad.map(esc).join('<br>') : ''}</div></section>`;
   }).join('');
@@ -445,6 +471,7 @@ export const actions = {
     await refresh();
   },
   async 'o-s4'(t) {
+    if (t.dataset.key === 'imm') return go(`/jobs/${J.job.id}/packets`);
     const c = findCrew(t.dataset.id);
     const s4 = { ...c.s4, [t.dataset.key]: !c.s4[t.dataset.key] };
     await api('PATCH', `/api/crew/${c.id}`, { s4 });
@@ -485,7 +512,18 @@ export const actions = {
     await patchJob({ services: L.includes(s) ? L.filter(x => x !== s) : L.concat(s) });
   },
   'o-plan'(t) { if (!closed()) planDialog(findCrew(t.dataset.id)); },
-  'o-expand'(t, e) { if (e.target.closest('[data-act="o-photo"]')) return; A.ui.expand = A.ui.expand === +t.dataset.id ? null : +t.dataset.id; render(true); },
+  'o-expand'(t, e) {
+    if (e.target.closest('[data-act="o-photo"]')) return;
+    A.ui.expand = A.ui.expand === +t.dataset.id ? null : +t.dataset.id;
+    render(true);
+    const row = app().querySelector(`tr.click[data-id="${t.dataset.id}"]`);
+    if (row && e.detail === 0) row.focus();
+  },
+  async 'o-driver'(t) {
+    const to = +t.dataset.to || null;
+    await api('PATCH', `/api/crew/${t.dataset.id}`, { driver_id: to, expected_assignment_revision:findCrew(t.dataset.id).assignment_rev });
+    await refresh(to ? 'เปลี่ยนคนขับแล้ว ลูกเรือขึ้นในมือถือของคนขับทันที' : 'เอาคนขับออกแล้ว');
+  },
   'o-photo'(t) { openLb(t.dataset.src, t.dataset.cap); },
   'o-copylink'(t) { copy(t.dataset.link, 'คัดลอกลิงก์'); },
   'o-newtoken'() {
@@ -529,7 +567,7 @@ export const changes = {
   async 'o-set'(t) {
     const f = t.dataset.f;
     const v = f === 'room' ? t.value.trim() : t.value ? +t.value : null;
-    await api('PATCH', `/api/crew/${t.dataset.id}`, { [f]: v });
+    await api('PATCH', `/api/crew/${t.dataset.id}`, { [f]: v, expected_assignment_revision:findCrew(t.dataset.id).assignment_rev });
     await refresh(f === 'agent_id' ? (v ? 'มอบหมายแล้ว ลูกเรือขึ้นในมือถือของผู้ดูแลทันที' : 'ยกเลิกการมอบหมายแล้ว') : 'บันทึกแล้ว');
   },
   'o-tpl'(t) { A.ui.tpl = t.value; A.ui.mailEdited = false; render(true); },

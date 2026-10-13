@@ -1,7 +1,7 @@
 import { A, go, boot, chrome, flushPending } from '../app.js';
 import { api, pendingItems, otherPendingCount, itemKey, pendingFile, discardPending, retryPending, logoutDevice } from '../api.js';
-import { esc } from '../core.js';
-import { icon, toast } from '../ui.js';
+import { esc, userAv } from '../core.js';
+import { icon, toast, squarePhoto, openDialog, dlgHead, dlgFoot } from '../ui.js';
 
 const app = () => document.getElementById('app');
 const ROLE = { admin: 'ผู้ดูแลระบบ', office: 'สำนักงาน', field: 'พนักงานภาคสนาม' };
@@ -70,17 +70,22 @@ function account() {
   const u = A.me;
   const items = pendingItems(u.id);
   app().innerHTML = `<div class="narrow stack">
-    <div class="card"><div class="card-h"><h3>บัญชีของฉัน</h3></div><div class="card-b">
-      <div class="who-row"><span class="av lg">${esc([...u.name][0] || '?')}</span><div><div class="nm">${esc(u.name)}</div><div class="sub">${esc(roleLabel(u))}${u.title ? ' · ' + esc(u.title) : ''}</div><div class="sub">ชื่อผู้ใช้ ${esc(u.username)}</div></div></div>
+    <div class="card"><div class="card-h"><h2>บัญชีของฉัน</h2></div><div class="card-b">
+      <div class="who-row">${userAv(u, 'lg')}<div><div class="nm">${esc(u.name)}</div><div class="sub">${esc(roleLabel(u))}${u.title ? ' · ' + esc(u.title) : ''}</div><div class="sub">ชื่อผู้ใช้ ${esc(u.username)}</div></div></div>
+      <div class="avedit" id="avedit">
+        <div class="row"><label class="btn line sm">${icon('camera')}${u.avatar_at ? 'เปลี่ยนรูป' : 'เพิ่มรูปโปรไฟล์'}<input class="vh" type="file" accept="image/*" data-chg="me-avatar" aria-label="${u.avatar_at ? 'เปลี่ยนรูปโปรไฟล์' : 'เพิ่มรูปโปรไฟล์'}"></label>${u.avatar_at ? `<button class="btn line sm danger" type="button" data-act="me-avatardel">${icon('trash')}ลบรูป</button>` : ''}</div>
+        <div class="fhelp">รูปโปรไฟล์แสดงข้างชื่อของคุณให้พนักงานในระบบเห็น เลือกรูปจากเครื่องหรือถ่ายใหม่ได้ ระบบตัดเป็นสี่เหลี่ยมจัตุรัสและย่อให้อัตโนมัติ</div>
+        <div class="fstat" role="status"></div><div class="ferr" role="alert"></div>
+      </div>
     </div></div>
-    <div class="card"><div class="card-h"><h3>เปลี่ยนรหัสผ่าน</h3></div><div class="card-b">
+    <div class="card"><div class="card-h"><h2>เปลี่ยนรหัสผ่าน</h2></div><div class="card-b">
       <form class="form1" id="pwf">
         <label class="f">รหัสผ่านเดิม<input name="current" type="password" required autocomplete="current-password"></label>
         <label class="f">รหัสผ่านใหม่ (อย่างน้อย 8 ตัว)<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
         <div class="ferr" role="alert"></div>
         <button class="btn" type="submit">${icon('lock')}เปลี่ยนรหัสผ่าน</button>
       </form></div></div>
-    <div class="card" id="pending-work"><div class="card-h"><h3>งานที่ยังส่งไม่สำเร็จ (${items.length})</h3></div><div class="card-b stack">
+    <div class="card" id="pending-work"><div class="card-h"><h2>งานที่ยังส่งไม่สำเร็จ (${items.length})</h2></div><div class="card-b stack">
       <p class="muted s14">ก่อนออกจากระบบ กรุณาส่งงานให้ครบ หรือบันทึกสำเนาแล้วลบรายการที่ไม่ต้องการ ระบบจะไม่ลบงานค้างให้อัตโนมัติ</p>
       ${otherPendingCount(u.id) ? '<p class="muted s14">เครื่องนี้มีงานค้างของบัญชีอื่น ระบบจะเก็บไว้หลังออกจากระบบ เพื่อให้เจ้าของบัญชีกลับเข้าสู่ระบบมาส่งหรือบันทึกสำเนา</p>' : ''}
       ${items.map(it => `<div class="stack"><div>${esc(it.label || (it.photo ? 'รูปภาพ' : 'ยืนยันจุด'))}</div><div class="sub">${esc(new Date(it.at).toLocaleString('th-TH'))}</div>${it.error ? `<p class="ferr" role="alert">${esc(it.error)}</p>` : '<div class="sub">รอส่งเมื่อเชื่อมต่อและเข้าสู่ระบบด้วยบัญชีนี้</div>'}<div class="stack"><button class="btn line" type="button" data-act="pending-save" data-key="${esc(itemKey(it))}">${icon('download')}บันทึกสำเนา</button><button class="btn line" type="button" data-act="pending-discard" data-key="${esc(itemKey(it))}">ลบรายการนี้ออกจากเครื่อง</button></div></div>`).join('')}
@@ -98,7 +103,46 @@ function account() {
   });
 }
 
+function avatarDone(at, msg) {
+  A.me.avatar_at = at;
+  const me = A.users.find(x => x.id === A.me.id);
+  if (me) me.avatar_at = at;
+  chrome(true);
+  account();
+  document.querySelector('#avedit .fstat').textContent = msg;
+  toast(msg);
+}
+
+export const changes = {
+  async 'me-avatar'(t) {
+    const file = t.files && t.files[0];
+    t.value = '';
+    if (!file) return;
+    const box = document.getElementById('avedit'), err = box.querySelector('.ferr'), stat = box.querySelector('.fstat');
+    err.textContent = '';
+    stat.textContent = 'กำลังอัปโหลดรูป...';
+    box.classList.add('busy');
+    try {
+      if (!file.type.startsWith('image/')) throw new Error('กรุณาเลือกไฟล์รูปภาพ');
+      const blob = await squarePhoto(file);
+      if (!blob) throw new Error('เปิดรูปนี้ไม่ได้ กรุณาเลือกรูป JPG หรือ PNG');
+      const r = await api('PUT', '/api/me/avatar', blob);
+      avatarDone(r.avatar_at, 'เปลี่ยนรูปโปรไฟล์แล้ว');
+    } catch (e) {
+      box.classList.remove('busy');
+      stat.textContent = '';
+      err.textContent = e.message || 'อัปโหลดรูปไม่สำเร็จ กรุณาลองใหม่';
+    }
+  }
+};
+
 export const actions = {
+  'me-avatardel'() {
+    openDialog(`<form class="dlg-form">${dlgHead('ลบรูปโปรไฟล์')}<div class="dlg-b"><p>ลบรูปโปรไฟล์ของคุณ? ระบบจะแสดงตัวอักษรแรกของชื่อแทน</p></div>${dlgFoot('ลบรูป')}</form>`, async () => {
+      await api('DELETE', '/api/me/avatar');
+      avatarDone(0, 'ลบรูปโปรไฟล์แล้ว');
+    });
+  },
   async logout(t) {
     if (t.disabled) return;
     t.disabled = true;

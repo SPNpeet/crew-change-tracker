@@ -34,9 +34,9 @@ try{
  await mockStorage('warning');
  ok(await b.eval(`document.querySelector('[data-storage-level="warning"]').textContent.includes('ขออนุมัติบริษัทก่อน')&&!!document.querySelector('.jobtile')`),'near-full notice requests cost approval and leaves the job list usable');
  await b.shot('storage-warning-mobile');
- await mockStorage('full');ok(await b.eval(`document.querySelector('[data-storage-level="full"]').textContent.includes('พื้นที่รูปเต็มแล้ว')`),'full quota has a distinct notice');
+ await mockStorage('full');ok(await b.eval(`document.querySelector('[data-storage-level="full"]').textContent.includes('พื้นที่เก็บไฟล์เต็มแล้ว')`),'full quota has a distinct notice');
  await b.eval(`window.fetch=(url,opts)=>String(url)==='/api/storage'?Promise.resolve(new Response('{}',{status:503,headers:{'content-type':'application/json'}})):window.realStorageFetch(url,opts);import('/js/app.js').then(a=>a.go('/jobs'))`);await sleep(250);
- ok(await b.eval(`document.querySelector('.storage-status').textContent.includes('ตรวจพื้นที่รูปไม่ได้')&&!!document.querySelector('.jobtile')`),'storage-read failure leaves existing jobs accessible');
+ ok(await b.eval(`document.querySelector('.storage-status').textContent.includes('ตรวจพื้นที่เก็บไฟล์ไม่ได้')&&!!document.querySelector('.jobtile')`),'storage-read failure leaves existing jobs accessible');
  await api('POST','/api/users',{username:'officefixture',name:'TEST OFFICE',role:'office',password:FIELD_PASS});
  const v=await api('POST','/api/vehicles',{name:'TEST VAN',plate:'TEST 001',driver:'TEST DRIVER'});
  const h=await api('POST','/api/hotels',{name:'TEST HOTEL'});

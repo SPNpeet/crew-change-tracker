@@ -3,9 +3,16 @@ import { documentNameEn } from '../public/js/core.js';
 import { login, logout, currentUser, sessionCookie, hashPassword, checkPasswordRules, publicUser, isOffice, seesAllCrew, requireUser, requireOffice, requireAdmin } from './auth.js';
 import { DEFAULTS, EDITABLE, BRAND_KINDS, loadSettings, loadBrand } from './settings.js';
 import { buildXlsx } from './xlsx.js';
+import { packetRoute, WORKFLOW_TABLES } from './packet-api.js';
 
 const MAX_PHOTO = 10 * 1024 * 1024;
 const MAX_BRAND = 2 * 1024 * 1024;
+const MAX_AVATAR = 1024 * 1024;
+const UPLOAD_ID = /^[A-Za-z0-9_-]{16,80}$/;
+const GPS_STATES = ['ok', 'denied', 'unavailable', 'timeout'];
+const CP_KEYS = ['cp_on', 'cp_off', 'cp_on_chain', 'cp_off_chain'];
+const ROLE_EN = { agent: 'Agent', driver: 'Driver', lead: 'Field lead', office: 'Office', admin: 'Admin' };
+const USED_BYTES = '(SELECT COALESCE(SUM(size), 0) FROM photos) + (SELECT COALESCE(SUM(size), 0) FROM crew_files) + (SELECT COALESCE(SUM(avatar_size), 0) FROM users) + (SELECT COALESCE(SUM(byte_size), 0) FROM wf_packets)';
 const FILE_KINDS = { passport: 'พาสปอร์ต', sirb: 'Seaman book', ticket: 'ตั๋วเครื่องบิน', other: 'อื่น ๆ' };
 const FILE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf' };
 const BRAND_LABEL = { letterhead: 'หัวจดหมาย', signature: 'ลายเซ็น', stamp: 'ตราประทับ' };
@@ -54,17 +61,21 @@ async function route(req, env, url) {
   const expectedUser = req.headers.get('x-cct-user');
   if (expectedUser && expectedUser !== String(u.id)) throw new HttpError(401, 'บัญชีในหน้าต่างนี้เปลี่ยนแล้ว กรุณาเข้าสู่ระบบใหม่');
 
+  if (seg[0] === 'workflow') return packetRoute(req, env, u, seg);
   if (p === '/api/me' && m === 'GET') return json(await bootFor(env, u));
   if (p === '/api/storage' && m === 'GET') {
     requireOffice(u);
     const settings = await loadSettings(env);
-    const row = await env.DB.prepare('SELECT (SELECT COALESCE(SUM(size), 0) FROM photos) + (SELECT COALESCE(SUM(size), 0) FROM crew_files) AS used').first();
+    const row = await env.DB.prepare(`SELECT ${USED_BYTES} AS used`).first();
     const usedBytes = row.used, limitBytes = settings.storage_gb * 1024 ** 3;
     const warningPercent = settings.storage_warning_percent;
     return json({ usedBytes, limitBytes, warningPercent, percent: Math.round(usedBytes / limitBytes * 10000) / 100,
       level: usedBytes >= limitBytes ? 'full' : usedBytes * 100 >= limitBytes * warningPercent ? 'warning' : 'ok' });
   }
   if (p === '/api/me/password' && m === 'POST') return changeOwnPassword(req, env, u);
+  if (p === '/api/me/avatar' && m === 'PUT') return putAvatar(req, env, u);
+  if (p === '/api/me/avatar' && m === 'DELETE') return deleteAvatar(env, u);
+  if (seg[0] === 'avatar' && seg.length === 2 && m === 'GET') return getAvatar(env, seg[1]);
   if (p === '/api/jobs' && m === 'GET') return listJobs(env, u, url);
   if (p === '/api/jobs' && m === 'POST') return createJob(req, env, u);
   if (p === '/api/field' && m === 'GET') return fieldList(env, u);
@@ -247,6 +258,10 @@ async function saveResource(req, env, u, kind, id) {
   const vals = {};
   for (const [c, max] of Object.entries(cols)) if (c in b) vals[c] = str(b[c], max);
   if ('active' in b) vals.active = b.active ? 1 : 0;
+  if (kind === 'vehicles' && 'user_id' in b) {
+    vals.user_id = intOrNull(b.user_id);
+    if (vals.user_id != null && !(await env.DB.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'field' AND active = 1").bind(vals.user_id).first())) throw new HttpError(400, 'บัญชีคนขับต้องเป็นพนักงานภาคสนามที่ยังใช้งานอยู่');
+  }
   if (id == null) {
     if (!vals.name) throw new HttpError(400, 'กรุณากรอกชื่อ');
     const keys = Object.keys(vals);
@@ -278,12 +293,39 @@ async function putSettings(req, env, u) {
     if (!saved.meta.changes) throw conflict();
     return json({ settings: { ...await loadSettings(env), mail_tpl: value } });
   }
+  if (Object.keys(b).some(k => CP_KEYS.includes(k) || k === 'cp_on_chain_id' || k === 'cp_off_chain_id' || k === 'cp_expected')) return putPoints(env, b, u);
   for (const k of Object.keys(b)) {
     if (!EDITABLE.includes(k) || k === 'max_users' || k === 'storage_gb') continue;
     const v = validateSetting(k, b[k]);
     stmts.push(env.DB.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, JSON.stringify(v)));
   }
   if (stmts.length) await env.DB.batch(stmts);
+  return json({ settings: await loadSettings(env) });
+}
+
+async function putPoints(env, b, u) {
+  const next = {};
+  for (const k of ['cp_on', 'cp_off']) if (k in b) next[k] = validateSetting(k, b[k]);
+  if (Object.keys(b).some(k => !CP_KEYS.includes(k) && k !== 'cp_on_chain_id' && k !== 'cp_off_chain_id' && k !== 'cp_expected')) throw new HttpError(400, 'กรุณาบันทึกจุดสถานะแยกจากการตั้งค่าอื่น');
+  if (!('cp_expected' in b)) throw new HttpError(428, 'หน้านี้เป็นรุ่นเก่า สิ่งที่แก้ยังไม่ถูกบันทึก กรุณาจดไว้แล้วโหลดหน้าใหม่ก่อนบันทึกจุดสถานะ');
+  const e = b.cp_expected;
+  if (!next.cp_on || !next.cp_off || !e || typeof e !== 'object' || Array.isArray(e)) throw new HttpError(400, 'กรุณาส่งจุดสถานะทั้งสองชุดพร้อมกัน');
+  const expected = Object.fromEntries(CP_KEYS.map(k => [k, validateSetting(k, e[k])]));
+  for (const k of ['cp_on', 'cp_off']) {
+    const at = next[k].findIndex(x => x.id === b[k + '_chain_id']);
+    if (at < 0) throw new HttpError(400, `จุดที่เลือกไว้ในช่อง "ถ้าลูกเรือมาช้า" ของ ${k === 'cp_on' ? 'On signer' : 'Off signer'} ไม่อยู่ในรายการแล้ว กรุณาเลือกจุดใหม่ก่อนบันทึก`);
+    next[k + '_chain'] = at;
+  }
+  const conflict = () => new HttpError(409, 'มีผู้แก้จุดสถานะระหว่างที่คุณกำลังแก้ไข สิ่งที่คุณแก้ยังอยู่ในหน้านี้ กรุณาจดไว้แล้วโหลดหน้าใหม่เพื่อดูค่าล่าสุดก่อนบันทึก');
+  const { results } = await env.DB.prepare("SELECT key, value FROM settings WHERE key IN ('cp_on', 'cp_off', 'cp_on_chain', 'cp_off_chain')").all();
+  const raw = k => (results.find(r => r.key === k) || {}).value ?? '';
+  const current = await loadSettings(env);
+  if (CP_KEYS.some(k => JSON.stringify(current[k]) !== JSON.stringify(expected[k]))) throw conflict();
+  // The first write re-checks every stored value; the rest only follow a successful first write.
+  const res = await env.DB.batch(CP_KEYS.map((k, i) => i === 0
+    ? env.DB.prepare(`INSERT INTO settings (key, value) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM users tu JOIN sessions ts ON ts.user_id=tu.id WHERE tu.id=? AND tu.active=1 AND tu.role='admin' AND ts.token_hash=? AND ts.expires_at>?) AND ${CP_KEYS.map(() => "COALESCE((SELECT value FROM settings WHERE key = ?), '') = ?").join(' AND ')} ON CONFLICT(key) DO UPDATE SET value = excluded.value`).bind(k, JSON.stringify(next[k]), u.id, u.token_hash, now(), ...CP_KEYS.flatMap(x => [x, raw(x)]))
+    : env.DB.prepare('INSERT INTO settings (key, value) SELECT ?, ? WHERE changes() = 1 ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, JSON.stringify(next[k]))));
+  if (!res[0].meta.changes) throw conflict();
   return json({ settings: await loadSettings(env) });
 }
 
@@ -307,7 +349,10 @@ function validateSetting(k, v) {
   }
   if (k === 'cp_on' || k === 'cp_off') {
     if (!Array.isArray(v) || v.some(x => !x || typeof x !== 'object' || Array.isArray(x))) throw new HttpError(400, 'รูปแบบไม่ถูกต้อง');
-    const out = v.map(x => ({ th: str(x.th, 60), en: str(x.en, 60), gap: Math.max(0, Math.min(10080, Math.round(Number(x.gap) || 0))) })).filter(x => x.th).slice(0, 20);
+    if (v.some(x => x.photo !== undefined && typeof x.photo !== 'boolean')) throw new HttpError(400, 'ค่า "ต้องถ่ายรูป" ไม่ถูกต้อง');
+    if (v.some(x => x.id !== undefined && (typeof x.id !== 'string' || !/^[A-Za-z0-9_-]{2,24}$/.test(x.id)))) throw new HttpError(400, 'รหัสจุดสถานะไม่ถูกต้อง');
+    const out = v.map(x => ({ id: x.id || randomId(8), th: str(x.th, 60), en: str(x.en, 60), gap: Math.max(0, Math.min(10080, Math.round(Number(x.gap) || 0))), photo: x.photo === true })).filter(x => x.th).slice(0, 20);
+    if (new Set(out.map(x => x.id)).size !== out.length) throw new HttpError(400, 'จุดสถานะซ้ำกัน กรุณาโหลดหน้าใหม่');
     if (out.length < 2) throw new HttpError(400, 'จุดสถานะต้องมีอย่างน้อย 2 จุด');
     out.forEach(x => { if (!x.en) x.en = x.th; });
     return out;
@@ -444,7 +489,7 @@ function oktbOptions(v) {
 async function deleteJob(env, u, id) {
   requireAdmin(u);
   await getJob(env, id);
-  const { results } = await env.DB.prepare('SELECT p.r2_key FROM photos p JOIN crew c ON c.id = p.crew_id WHERE c.job_id = ? UNION ALL SELECT f.r2_key FROM crew_files f JOIN crew c ON c.id = f.crew_id WHERE c.job_id = ?').bind(id, id).all();
+  const { results } = await env.DB.prepare('SELECT p.r2_key FROM photos p JOIN crew c ON c.id = p.crew_id WHERE c.job_id = ? UNION ALL SELECT f.r2_key FROM crew_files f JOIN crew c ON c.id = f.crew_id WHERE c.job_id = ? UNION ALL SELECT f.object_key AS r2_key FROM wf_packet_files f JOIN wf_packets p ON p.id=f.packet_id WHERE p.job_id = ?').bind(id, id, id).all();
   for (let i = 0; i < results.length; i += 900) await env.FILES.delete(results.slice(i, i + 900).map(r => r.r2_key));
   await env.DB.prepare('DELETE FROM jobs WHERE id = ?').bind(id).run();
   return json({ ok: true });
@@ -483,9 +528,9 @@ async function crewRows(env, where, binds, withFiles = false) {
   const mf = withFiles ? by(await inChunks(env, 'SELECT id, crew_id, kind, name, mime, size, at FROM crew_files WHERE crew_id IN', ids, 'ORDER BY at, id')) : null;
   return crew.map(c => ({
     ...c, docs: parseJson(c.docs, {}), s4: parseJson(c.s4, {}),
-    cps: (mc.get(c.id) || []).map(x => ({ idx: x.idx, name: x.name, name_en: x.name_en, plan: x.plan_at, actual: x.actual_at, by: x.actual_by })),
+    cps: (mc.get(c.id) || []).map(x => ({ id: x.id, idx: x.idx, name: x.name, name_en: x.name_en, plan: x.plan_at, actual: x.actual_at, by: x.actual_by, role: x.actual_role, received: x.received_at, need_photo: x.need_photo ? 1 : 0, skip: x.photo_skip })),
     notes: (mn.get(c.id) || []).map(x => ({ id: x.id, at: x.at, by: x.user_id, text: x.text })),
-    photos: (mp.get(c.id) || []).map(x => ({ id: x.id, at: x.at, by: x.user_id, point: x.point, lat: x.lat, lng: x.lng })),
+    photos: (mp.get(c.id) || []).map(x => ({ id: x.id, at: x.at, by: x.user_id, point: x.point, lat: x.lat, lng: x.lng, cp_idx: x.cp_idx, cp_id: x.cp_id, acc: x.acc, gps: x.gps, received: x.received_at })),
     ...(mf ? { files: (mf.get(c.id) || []).map(x => ({ id: x.id, kind: x.kind, name: x.name, mime: x.mime, size: x.size, at: x.at })) } : {})
   }));
 }
@@ -503,15 +548,17 @@ async function inChunks(env, sql, ids, tail) {
 async function jobFull(env, u, id) {
   const j = await getJob(env, id);
   if (!isOffice(u)) {
-    const mine = seesAllCrew(u) ? true : await env.DB.prepare('SELECT 1 FROM crew WHERE job_id = ? AND agent_id = ? LIMIT 1').bind(id, u.id).first();
+    const mine = seesAllCrew(u) ? true : await env.DB.prepare('SELECT 1 FROM crew WHERE job_id = ? AND (agent_id = ? OR driver_id = ?) LIMIT 1').bind(id, u.id, u.id).first();
     if (!mine) throw new HttpError(403, 'บัญชีนี้ไม่มีสิทธิ์ดูงานนี้');
   }
-  const crew = await crewRows(env, isOffice(u) || seesAllCrew(u) ? 'job_id = ?' : 'job_id = ? AND agent_id = ?', isOffice(u) || seesAllCrew(u) ? [id] : [id, u.id], isOffice(u));
+  const crew = await crewRows(env, isOffice(u) || seesAllCrew(u) ? 'job_id = ?' : 'job_id = ? AND (agent_id = ? OR driver_id = ?)', isOffice(u) || seesAllCrew(u) ? [id] : [id, u.id, u.id], isOffice(u));
   const job = jobOut(j);
   if (!isOffice(u)) {
     for (const k of ['owner_token', 'owner_email', 'agent_email', 'remark', 'oktb']) delete job[k];
     return { job, crew: crew.map(fieldSafe), activity: [], now: now() };
   }
+  const {results: submitted} = await env.DB.prepare(`SELECT p.id AS packet_id, s.submitted_at, CAST(json_extract(person.value,'$.crew.id') AS INTEGER) AS crew_id FROM wf_submissions s JOIN wf_packets p ON p.id=s.packet_id JOIN wf_clock w ON w.job_id=p.job_id, json_each(p.snapshot,'$.payload.people') person WHERE p.job_id=? AND p.source_rev=w.rev ORDER BY s.recorded_at DESC`).bind(id).all();
+  for(const c of crew)c.packet_submission=submitted.find(s=>s.crew_id===c.id)||null;
   const { results: activity } = await env.DB.prepare('SELECT a.at, a.kind, a.text, a.user_id, u.name AS who FROM activity a LEFT JOIN users u ON u.id = a.user_id WHERE a.job_id = ? ORDER BY a.at DESC, a.id DESC LIMIT 150').bind(id).all();
   return { job, crew, activity, now: now() };
 }
@@ -523,10 +570,12 @@ function fieldSafe(c) {
 
 async function fieldList(env, u) {
   const all = isOffice(u) || seesAllCrew(u);
-  const crew = await crewRows(env, all ? "job_id IN (SELECT id FROM jobs WHERE status = 'open')" : "agent_id = ? AND job_id IN (SELECT id FROM jobs WHERE status = 'open')", all ? [] : [u.id]);
+  const crew = await crewRows(env, all ? "job_id IN (SELECT id FROM jobs WHERE status = 'open')" : "(agent_id = ? OR driver_id = ?) AND job_id IN (SELECT id FROM jobs WHERE status = 'open')", all ? [] : [u.id, u.id]);
   const jobIds = [...new Set(crew.map(c => c.job_id))];
   const jobs = jobIds.length ? await inChunks(env, 'SELECT id, vessel, port, eta, etb, etd, agent FROM jobs WHERE id IN', jobIds, 'ORDER BY eta') : [];
-  return json({ jobs, crew: isOffice(u) ? crew : crew.map(fieldSafe), now: now() });
+  if (isOffice(u)) return json({ jobs, crew, now: now() });
+  const why = c => c.agent_id === u.id ? (c.driver_id === u.id ? 'both' : 'agent') : c.driver_id === u.id ? 'driver' : undefined;
+  return json({ jobs, crew: crew.map(c => ({ ...fieldSafe(c), mine: why(c) })), now: now() });
 }
 
 /* ---------- crew ---------- */
@@ -537,9 +586,17 @@ async function getCrew(env, id) {
   return c;
 }
 
+const ownCrew = (u, c) => isOffice(u) || seesAllCrew(u) || c.agent_id === u.id || c.driver_id === u.id;
+const capacity = (u, c) => isOffice(u) ? u.role : c.agent_id === u.id ? 'agent' : c.driver_id === u.id ? 'driver' : 'lead';
+
 function canField(u, c) {
-  if (isOffice(u) || seesAllCrew(u)) return;
-  if (c.agent_id !== u.id) throw new HttpError(403, 'ลูกเรือคนนี้ไม่ได้อยู่ในความดูแลของคุณ');
+  if (!ownCrew(u, c)) throw new HttpError(403, 'ลูกเรือคนนี้ไม่ได้อยู่ในความดูแลของคุณ');
+}
+
+async function vehicleDriver(env, vehicleId) {
+  if (vehicleId == null) return null;
+  const r = await env.DB.prepare("SELECT u.id FROM vehicles v JOIN users u ON u.id = v.user_id WHERE v.id = ? AND u.active = 1 AND u.role = 'field'").bind(vehicleId).first();
+  return r ? r.id : null;
 }
 
 function openJob(c) {
@@ -581,7 +638,7 @@ async function addCrew(req, env, u, jobId) {
     crewStmt.push(stmts.length);
     stmts.push(env.DB.prepare('INSERT INTO crew (job_id, name, rank, type, nationality, flight, passport, passport_exp, sirb_no, sirb_exp, agent_id, chain_end, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .bind(jobId, r.name, str(r.x.rank, 40), r.type, str(r.x.nationality, 60), str(r.x.flight, 40), str(r.x.passport, 40), r.passport_exp, str(r.x.sirb_no, 40), r.sirb_exp, r.agent, r.chain, t));
-    r.tpl.forEach((cp, i) => stmts.push(env.DB.prepare('INSERT INTO checkpoints (crew_id, idx, name, name_en) VALUES ((SELECT MAX(id) FROM crew WHERE job_id = ?), ?, ?, ?)').bind(jobId, i, cp.th, cp.en)));
+    r.tpl.forEach((cp, i) => stmts.push(env.DB.prepare('INSERT INTO checkpoints (crew_id, idx, name, name_en, need_photo) VALUES ((SELECT MAX(id) FROM crew WHERE job_id = ?), ?, ?, ?, ?)').bind(jobId, i, cp.th, cp.en, cp.photo ? 1 : 0)));
   }
   const res = await env.DB.batch(stmts);
   const ids = crewStmt.map(k => res[k].meta.last_row_id);
@@ -612,6 +669,7 @@ async function patchCrew(req, env, u, id) {
   if ('s4' in b) {
     const old = parseJson(c.s4, {});
     const s4 = { oktb: !!(b.s4 && b.s4.oktb), meet: !!(b.s4 && b.s4.meet), imm: !!(b.s4 && b.s4.imm) };
+    if (s4.imm && !old.imm) throw new HttpError(409, 'Prepare a complete packet, obtain internal approval and record submission in Document workflow.');
     const complete = settings.docs.every(d => docs[d]);
     if (s4.oktb && !old.oktb && !complete) throw new HttpError(409, 'เอกสารของลูกเรือคนนี้ยังไม่ครบ ยังออก OKTB ไม่ได้');
     sets.s4 = JSON.stringify(s4);
@@ -631,6 +689,18 @@ async function patchCrew(req, env, u, id) {
     if (v !== c[f]) logs.push(`${c.name} · ${label}: ${nm || 'ยังไม่กำหนด'}`);
     sets[f] = v;
   }
+  // The driver is copied when the vehicle is chosen; relinking a vehicle later never changes crew already assigned.
+  if ('vehicle_id' in sets && sets.vehicle_id !== c.vehicle_id) sets.driver_id = await vehicleDriver(env, sets.vehicle_id);
+  if ('driver_id' in b) {
+    const want = intOrNull(b.driver_id);
+    if (want != null && want !== await vehicleDriver(env, 'vehicle_id' in sets ? sets.vehicle_id : c.vehicle_id)) throw new HttpError(400, 'คนขับต้องเป็นบัญชีที่เชื่อมกับรถของลูกเรือคนนี้และยังใช้งานอยู่');
+    sets.driver_id = want;
+  }
+  if ('driver_id' in sets && sets.driver_id !== c.driver_id) {
+    const d = sets.driver_id == null ? null : await env.DB.prepare('SELECT name FROM users WHERE id = ?').bind(sets.driver_id).first();
+    logs.push(`${c.name} · คนขับในมือถือ: ${d ? d.name : 'ไม่มี'}`);
+  }
+  let replacement = null;
   if ('type' in b && b.type !== c.type) {
     if (!['on', 'off'].includes(b.type)) throw new HttpError(400, 'ประเภทไม่ถูกต้อง');
     const started = await env.DB.prepare('SELECT 1 FROM checkpoints WHERE crew_id = ? AND actual_at IS NOT NULL LIMIT 1').bind(id).first();
@@ -638,13 +708,48 @@ async function patchCrew(req, env, u, id) {
     const tpl = b.type === 'on' ? settings.cp_on : settings.cp_off;
     sets.type = b.type;
     sets.chain_end = Math.min(tpl.length - 1, b.type === 'on' ? settings.cp_on_chain : settings.cp_off_chain);
-    await env.DB.batch([env.DB.prepare('DELETE FROM checkpoints WHERE crew_id = ?').bind(id), ...tpl.map((cp, i) => env.DB.prepare('INSERT INTO checkpoints (crew_id, idx, name, name_en) VALUES (?, ?, ?, ?)').bind(id, i, cp.th, cp.en))]);
+    replacement = tpl;
   }
+  const assignmentChanged=['vehicle_id','driver_id','agent_id'].some(k=>k in sets&&sets[k]!==c[k]);
+  if(assignmentChanged)assignmentIdentity(b.expected_assignment_revision,c);
   const keys = Object.keys(sets);
   if (keys.length) {
-    const stmts = [env.DB.prepare(`UPDATE crew SET ${keys.map(k => k + ' = ?').join(', ')} WHERE id = ?`).bind(...keys.map(k => sets[k]), id)];
-    for (const l of logs) stmts.push(env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) VALUES (?, ?, ?, ?, ?)').bind(c.job_id, now(), u.id, 'log', l));
-    await env.DB.batch(stmts);
+    // Every effect shares the same source snapshot and current office session.
+    // D1 batch is atomic: a competing assignment/type edit cannot leave half a change.
+    let guard = `EXISTS (SELECT 1 FROM crew ac JOIN jobs aj ON aj.id=ac.job_id
+      JOIN users au ON au.id=? JOIN sessions ass ON ass.user_id=au.id
+      WHERE ac.id=? AND aj.status='open' AND au.active=1 AND au.role IN ('admin','office')
+      AND ass.token_hash=? AND ass.expires_at>? AND ac.assignment_rev=? AND ac.type=? AND ac.agent_id IS ? AND ac.driver_id IS ? AND ac.vehicle_id IS ?
+      AND ${keys.map(k=>`ac.${k} IS ?`).join(' AND ')})`;
+    const args=[u.id,id,u.token_hash,now(),c.assignment_rev,c.type,c.agent_id,c.driver_id,c.vehicle_id,...keys.map(k=>c[k])];
+    for (const [k,table] of [['vehicle_id','vehicles'],['hotel_id','hotels'],['agent_id','users']]) {
+      if (sets[k]!=null && sets[k]!==c[k]) {
+        guard+=` AND EXISTS (SELECT 1 FROM ${table} WHERE id=? AND active=1${k==='agent_id'?" AND role='field'":''})`;
+        args.push(sets[k]);
+      }
+    }
+    // A null driver lookup is also a snapshot: a newly linked account must not
+    // silently produce an assignment with no driver. Explicit unlink remains allowed.
+    if ('vehicle_id' in sets && sets.vehicle_id!==c.vehicle_id && !('driver_id' in b)) {
+      guard+=` AND (SELECT du.id FROM vehicles av JOIN users du ON du.id=av.user_id WHERE av.id=? AND du.active=1 AND du.role='field') IS ?`;
+      args.push(sets.vehicle_id,sets.driver_id);
+    }
+    if ('driver_id' in sets && sets.driver_id!=null) {
+      guard+=` AND EXISTS (SELECT 1 FROM vehicles av JOIN users du ON du.id=av.user_id WHERE av.id=? AND du.id=? AND du.active=1 AND du.role='field')`;
+      args.push('vehicle_id' in sets?sets.vehicle_id:c.vehicle_id,sets.driver_id);
+    }
+    if (replacement) { guard+=' AND NOT EXISTS (SELECT 1 FROM checkpoints WHERE crew_id=? AND actual_at IS NOT NULL)'; args.push(id); }
+    const stmts=[];
+    if (replacement) {
+      stmts.push(env.DB.prepare(`DELETE FROM checkpoints WHERE crew_id=? AND ${guard}`).bind(id,...args));
+      for (const [i,cp] of replacement.entries()) stmts.push(env.DB.prepare(`INSERT INTO checkpoints(crew_id,idx,name,name_en,need_photo) SELECT ?,?,?,?,? WHERE ${guard}`).bind(id,i,cp.th,cp.en,cp.photo?1:0,...args));
+    }
+    const update=stmts.length;
+    stmts.push(env.DB.prepare(`UPDATE crew SET ${keys.map(k=>k+'=?').join(',')} WHERE id=? AND ${guard}`).bind(...keys.map(k=>sets[k]),id,...args));
+    if(assignmentChanged)stmts.push(env.DB.prepare('UPDATE wf_assignment_history SET changed_by=?,changed_at=? WHERE crew_id=? AND revision=? AND changed_by IS NULL AND changes()=1').bind(u.id,now(),id,c.assignment_rev+1));
+    for (const l of logs) stmts.push(env.DB.prepare('INSERT INTO activity(job_id,at,user_id,kind,text) SELECT ?,?,?,?,? WHERE changes()=1').bind(c.job_id,now(),u.id,'log',l));
+    const results=await env.DB.batch(stmts);
+    if (!results[update].meta.changes) throw new HttpError(409, 'Crew, assignment or session changed. Refresh and retry.');
   }
   return json({ ok: true });
 }
@@ -684,6 +789,26 @@ async function putPlan(req, env, u, id) {
   return json({ ok: true });
 }
 
+// Recheck current account, session, role, assignment and job inside each write.
+// This is intentionally based on database state, never the cached request user.
+const FIELD_MUTATION = `EXISTS (
+  SELECT 1 FROM crew mc JOIN jobs mj ON mj.id = mc.job_id
+  JOIN users mu ON mu.id = ? JOIN sessions ms ON ms.user_id = mu.id
+  WHERE mc.id = ? AND mj.status = 'open' AND mu.active = 1
+  AND ms.token_hash = ? AND ms.expires_at > ? AND mc.assignment_rev = ?
+  AND (mu.role IN ('admin', 'office') OR
+    (mu.role = 'field' AND (mu.see_all = 1 OR mc.agent_id = mu.id OR mc.driver_id = mu.id))))`;
+const mutationArgs = (u, id, revision) => [u.id, id, u.token_hash, now(),revision];
+function assignmentIdentity(revision,c) {
+  if(revision==null&&c.assignment_rev===1)return; // Legacy baseline only; never guess after a change.
+  if(revision==null)throw new HttpError(428,'Assignment changed since this client loaded. Refresh; queued work remains available for review.');
+  if(!Number.isSafeInteger(revision)||revision!==c.assignment_rev)throw new HttpError(409,'Assignment revision changed. Review the saved event before retrying.');
+}
+function checkpointIdentity(b, cp) {
+  if (b.cp_id == null) throw new HttpError(428, 'กรุณาโหลดหน้าใหม่ก่อนยืนยัน งานที่ยังส่งไม่สำเร็จยังเก็บไว้ให้ตรวจสอบ');
+  if (!Number.isSafeInteger(b.cp_id) || !cp || b.cp_id !== cp.id) throw new HttpError(409, 'จุดสถานะเปลี่ยนแล้ว กรุณาโหลดหน้าใหม่และตรวจงานที่ยังส่งไม่สำเร็จ');
+}
+
 async function confirm(req, env, u, id) {
   const c = await getCrew(env, id);
   canField(u, c);
@@ -695,6 +820,8 @@ async function confirm(req, env, u, id) {
   const t = now();
   let at = deviceTime(b.at, b.sent_at, t);
   if (!Number.isInteger(idx) || idx < 0 || idx >= cps.length) throw new HttpError(400, 'จุดไม่ถูกต้อง');
+  checkpointIdentity(b, cps[idx]);
+  assignmentIdentity(b.assignment_revision,c);
   if (cps[idx].actual_at != null) {
     if (cps[idx].actual_by === u.id && Math.abs(cps[idx].actual_at - at) < 120000) return json({ ok: true, duplicate: true, at: cps[idx].actual_at });
     throw new HttpError(409, `จุด "${cps[idx].name}" ยืนยันไปแล้ว`);
@@ -702,9 +829,19 @@ async function confirm(req, env, u, id) {
   if (idx !== next) throw new HttpError(409, `ต้องยืนยัน "${cps[next].name}" ก่อน`);
   if (idx > 0 && at < cps[idx - 1].actual_at) at = cps[idx - 1].actual_at;
   const lat = coordinate(b.lat, 90), lng = coordinate(b.lng, 180);
+  let skip = '';
+  if (cps[idx].need_photo) {
+    if (b.upload_id != null && !UPLOAD_ID.test(String(b.upload_id))) throw new HttpError(400, 'รหัสรูปไม่ถูกต้อง');
+    // A promised upload only permits the confirmation; the photo state itself is read from stored photos.
+    if (b.upload_id == null && !(await env.DB.prepare('SELECT 1 FROM photos WHERE crew_id = ? AND cp_id = ? LIMIT 1').bind(id, b.cp_id).first())) {
+      skip = str(b.skip_reason, 200);
+      if (skip.length < 3 || skip.length > 120) throw new HttpError(400, `จุด "${cps[idx].name}" ต้องถ่ายรูป ถ้าไม่มีรูปให้ระบุเหตุผล 3–120 ตัวอักษร (ถ้าไม่เห็นปุ่มถ่ายรูป ให้ปิดแล้วเปิดหน้านี้ใหม่)`);
+    }
+  }
   const res = await env.DB.batch([
-    env.DB.prepare('UPDATE checkpoints SET actual_at = ?, actual_by = ?, lat = ?, lng = ? WHERE crew_id = ? AND idx = ? AND actual_at IS NULL').bind(at, u.id, lat, lng, id, idx),
-    env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) VALUES (?, ?, ?, ?, ?)').bind(c.job_id, t, u.id, 'cp', `${c.name} · ${cps[idx].name}`)
+    env.DB.prepare(`UPDATE checkpoints SET actual_at = ?, actual_by = ?, lat = ?, lng = ?, actual_role = (SELECT CASE WHEN ru.role IN ('admin','office') THEN ru.role WHEN rc.agent_id=ru.id THEN 'agent' WHEN rc.driver_id=ru.id THEN 'driver' ELSE 'lead' END FROM users ru JOIN crew rc ON rc.id=? WHERE ru.id=?), received_at = ?, photo_skip = ? WHERE id = ? AND crew_id = ? AND idx = ? AND actual_at IS NULL AND ${FIELD_MUTATION}
+      AND NOT EXISTS (SELECT 1 FROM checkpoints prior WHERE prior.crew_id = ? AND prior.idx < ? AND (prior.actual_at IS NULL OR prior.actual_at > ?))`).bind(at, u.id, lat, lng, id, u.id, t, skip, b.cp_id, id, idx, ...mutationArgs(u, id, c.assignment_rev), id, idx, at),
+    env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) SELECT ?, ?, ?, ?, ? WHERE changes() = 1').bind(c.job_id, t, u.id, 'cp', `${c.name} · ${cps[idx].name}${skip ? ' · ยืนยันโดยไม่มีรูป: ' + skip : ''}`)
   ]);
   if (!res[0].meta.changes) throw new HttpError(409, 'มีคนยืนยันจุดนี้ไปก่อนแล้ว');
   return json({ ok: true, at });
@@ -718,10 +855,14 @@ async function undo(req, env, u, id) {
   const last = await env.DB.prepare('SELECT * FROM checkpoints WHERE crew_id = ? AND actual_at IS NOT NULL ORDER BY idx DESC LIMIT 1').bind(id).first();
   if (!last) throw new HttpError(409, 'ยังไม่มีจุดที่ยืนยัน');
   if (b.idx !== undefined && Number(b.idx) !== last.idx) throw new HttpError(409, `ข้อมูลเปลี่ยนแล้ว จุดล่าสุดตอนนี้คือ "${last.name}" กรุณาตรวจอีกครั้ง`);
-  await env.DB.batch([
-    env.DB.prepare('UPDATE checkpoints SET actual_at = NULL, actual_by = NULL, lat = NULL, lng = NULL WHERE id = ?').bind(last.id),
-    env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) VALUES (?, ?, ?, ?, ?)').bind(c.job_id, now(), u.id, 'log', `${c.name} · ย้อนกลับ "${last.name}"`)
+  checkpointIdentity(b, last);
+  assignmentIdentity(b.assignment_revision,c);
+  const res = await env.DB.batch([
+    env.DB.prepare(`UPDATE checkpoints SET actual_at = NULL, actual_by = NULL, lat = NULL, lng = NULL, actual_role = '', received_at = NULL, photo_skip = '' WHERE id = ? AND actual_at = ? AND ${FIELD_MUTATION}
+      AND NOT EXISTS (SELECT 1 FROM checkpoints later WHERE later.crew_id = ? AND later.idx > ? AND later.actual_at IS NOT NULL)`).bind(last.id, last.actual_at, ...mutationArgs(u, id, c.assignment_rev), id, last.idx),
+    env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) SELECT ?, ?, ?, ?, ? WHERE changes() = 1').bind(c.job_id, now(), u.id, 'log', `${c.name} · ย้อนกลับ "${last.name}"`)
   ]);
+  if (!res[0].meta.changes) throw new HttpError(409, 'จุดสถานะหรือสิทธิ์เปลี่ยนแล้ว กรุณาโหลดหน้าใหม่');
   return json({ ok: true });
 }
 
@@ -730,12 +871,14 @@ async function addNote(req, env, u, id) {
   canField(u, c);
   openJob(c);
   const b = await readJson(req);
+  assignmentIdentity(b.assignment_revision,c);
   const t = text(b.text, 1000);
   if (!t) throw new HttpError(400, 'กรุณาพิมพ์หมายเหตุ');
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO notes (crew_id, at, user_id, text) VALUES (?, ?, ?, ?)').bind(id, now(), u.id, t),
-    env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) VALUES (?, ?, ?, ?, ?)').bind(c.job_id, now(), u.id, 'note', `${c.name} · หมายเหตุ: ${t}`)
+  const res = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO notes (crew_id, at, user_id, text) SELECT ?, ?, ?, ? WHERE ${FIELD_MUTATION}`).bind(id, now(), u.id, t, ...mutationArgs(u, id, c.assignment_rev)),
+    env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) SELECT ?, ?, ?, ?, ? WHERE changes() = 1').bind(c.job_id, now(), u.id, 'note', `${c.name} · หมายเหตุ: ${t}`)
   ]);
+  if (!res[0].meta.changes) throw new HttpError(409, 'สถานะงานหรือสิทธิ์เปลี่ยนแล้ว ยังไม่ได้บันทึกหมายเหตุ');
   return json({ ok: true });
 }
 
@@ -760,9 +903,25 @@ async function addPhoto(req, env, u, id, url) {
   if (buf.byteLength > MAX_PHOTO) throw new HttpError(413, 'รูปใหญ่เกิน 10 MB');
   const point = str(url.searchParams.get('point'), 80);
   const lat = coordinate(url.searchParams.get('lat'), 90), lng = coordinate(url.searchParams.get('lng'), 180);
+  const acc = coordinate(url.searchParams.get('acc'), 1e7);
+  const gps = url.searchParams.get('gps') || '';
+  if (acc != null && acc < 0) throw new HttpError(400, 'พิกัดไม่ถูกต้อง');
+  if (gps && !GPS_STATES.includes(gps)) throw new HttpError(400, 'สถานะพิกัดไม่ถูกต้อง');
+  if (gps === 'ok' ? lat == null || lng == null : gps && (lat != null || lng != null)) throw new HttpError(400, 'พิกัดไม่ตรงกับสถานะพิกัด');
+  const cpRaw = url.searchParams.get('cp_idx');
+  const cpIdx = cpRaw == null || cpRaw === '' ? null : Number(cpRaw);
+  if (cpIdx != null && (!Number.isInteger(cpIdx) || cpIdx < 0 || !(await env.DB.prepare('SELECT 1 FROM checkpoints WHERE crew_id = ? AND idx = ?').bind(id, cpIdx).first()))) throw new HttpError(400, 'จุดไม่ถูกต้อง');
+  const cpIdRaw = url.searchParams.get('cp_id');
+  const cpId = cpIdRaw == null ? null : Number(cpIdRaw);
+  if (cpIdx != null) {
+    const cp = await env.DB.prepare('SELECT id FROM checkpoints WHERE crew_id = ? AND idx = ?').bind(id, cpIdx).first();
+    checkpointIdentity({cp_id: cpId}, cp);
+  } else if (cpId != null) throw new HttpError(400, 'Checkpoint index is required with checkpoint identity.');
+  const assignmentRaw=url.searchParams.get('assignment_revision');
   const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
   // sent_at changes on retry; the original capture time and payload must not.
-  const requestHash = await sha256(JSON.stringify([id, type, point, lat, lng, url.searchParams.get('at'), digest]));
+  // Requests from clients older than cp_idx/acc/gps keep their original hash, so their retries still match.
+  const requestHash = await sha256(JSON.stringify([id, type, point, lat, lng, url.searchParams.get('at'), digest, ...(cpIdx != null || acc != null || gps ? [cpIdx, acc, gps] : []), ...(cpId != null ? [cpId] : [])]));
   const suppliedId = url.searchParams.get('upload_id');
   if (suppliedId != null && !/^[A-Za-z0-9_-]{16,80}$/.test(suppliedId)) throw new HttpError(400, 'รหัสรูปไม่ถูกต้อง');
   // Old clients/outboxes have no upload id. Keep them retry-safe during rollout.
@@ -775,35 +934,60 @@ async function addPhoto(req, env, u, id, url) {
   const saved = await existing();
   if (saved) return duplicate(saved);
   openJob(c);
+  assignmentIdentity(assignmentRaw==null?null:Number(assignmentRaw),c);
   const settings = await loadSettings(env);
   const limit = settings.storage_gb * 1024 ** 3;
-  const used = await env.DB.prepare('SELECT (SELECT COALESCE(SUM(size), 0) FROM photos) + (SELECT COALESCE(SUM(size), 0) FROM crew_files) AS n').first();
+  const used = await env.DB.prepare(`SELECT ${USED_BYTES} AS n`).first();
   if (used.n + buf.byteLength > limit) throw new HttpError(507, 'พื้นที่เก็บไฟล์เต็มแล้ว กรุณาแจ้งผู้ดูแลระบบ');
-  const key = `photos/${c.job_id}/${id}/${u.id}-${uploadId}.${type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg'}`;
-  // Conditional creation prevents two racing requests from overwriting the object.
-  const obj = await env.FILES.put(key, buf, { onlyIf: new Headers({ 'If-None-Match': '*' }), httpMetadata: { contentType: type }, customMetadata: { request_hash: requestHash } });
-  if (!obj && (await env.FILES.head(key))?.customMetadata?.request_hash !== requestHash) throw new HttpError(409, 'รหัสรูปนี้ใช้กับรูปอื่นแล้ว กรุณาเลือกรูปใหม่');
-  const at = deviceTime(url.searchParams.get('at'), url.searchParams.get('sent_at'), now());
-  const [insert] = await env.DB.batch([
-    env.DB.prepare(`INSERT INTO photos (crew_id, point, r2_key, size, lat, lng, at, user_id, upload_id, request_hash)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE id = ? AND status = 'open')
-      AND (SELECT COALESCE(SUM(size), 0) FROM photos) + (SELECT COALESCE(SUM(size), 0) FROM crew_files) + ? <= ?
+  const key = `photos/${c.job_id}/${id}/${u.id}-${uploadId}-${randomId(16)}.${type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg'}`;
+  // Each attempt owns a distinct object: a losing request can compensate safely
+  // without deleting an object a simultaneous winning request references.
+  await env.FILES.put(key, buf, { httpMetadata: { contentType: type }, customMetadata: { request_hash: requestHash } });
+  const received = now();
+  const at = deviceTime(url.searchParams.get('at'), url.searchParams.get('sent_at'), received);
+  let insert;
+  try {
+    [insert] = await env.DB.batch([
+    env.DB.prepare(`INSERT INTO photos (crew_id, point, r2_key, size, lat, lng, at, user_id, upload_id, request_hash, cp_idx, acc, gps, received_at, cp_id)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${FIELD_MUTATION}
+      AND (? IS NULL OR EXISTS (SELECT 1 FROM checkpoints WHERE id = ? AND crew_id = ? AND idx = ?))
+      AND ${USED_BYTES} + ? <= ?
       ON CONFLICT(user_id, upload_id) DO NOTHING RETURNING id`)
-      .bind(id, point, key, buf.byteLength, lat, lng, at, u.id, uploadId, requestHash, c.job_id, buf.byteLength, limit),
+      .bind(id, point, key, buf.byteLength, lat, lng, at, u.id, uploadId, requestHash, cpIdx, acc, gps, received, cpId, ...mutationArgs(u, id, c.assignment_rev), cpId, cpId, id, cpIdx, buf.byteLength, limit),
     env.DB.prepare('INSERT INTO activity (job_id, at, user_id, kind, text) SELECT ?, ?, ?, ?, ? WHERE changes() = 1')
       .bind(c.job_id, now(), u.id, 'photo', `${c.name} · แนบรูป${point ? ' ' + point : ''}`)
   ]);
+  } catch (e) {
+    await compensatePhoto(env, key);
+    throw e;
+  }
   if (insert.results.length) return json({ id: insert.results[0].id });
+  await compensatePhoto(env, key);
   const raced = await existing();
   if (raced) return duplicate(raced);
-  openJob(await getCrew(env, id));
+  if (!(await env.DB.prepare(`SELECT 1 WHERE ${FIELD_MUTATION}`).bind(...mutationArgs(u, id, c.assignment_rev)).first())) throw new HttpError(409, 'สถานะงานหรือสิทธิ์เปลี่ยนแล้ว ยังไม่ได้บันทึกรูป');
+  if (cpId != null && !(await env.DB.prepare('SELECT 1 FROM checkpoints WHERE id=? AND crew_id=? AND idx=?').bind(cpId,id,cpIdx).first())) throw new HttpError(409, 'Checkpoint changed before the photo could be saved.');
+  const current = await getCrew(env, id);
+  canField(u, current);
+  openJob(current);
   throw new HttpError(507, 'พื้นที่เก็บไฟล์เต็มแล้ว กรุณาแจ้งผู้ดูแลระบบ');
 }
 
+async function compensatePhoto(env, key) {
+  try {
+    // A lost D1 response may follow a committed insert. Never remove its object.
+    if (!(await env.DB.prepare('SELECT 1 FROM photos WHERE r2_key = ?').bind(key).first())) await env.FILES.delete(key);
+  } catch {
+    // Unknown outcome or failed cleanup requires manifest reconciliation, not a
+    // blind delete. See scripts/reconcile-r2.mjs (read-only candidate report).
+    console.warn('Photo compensation deferred; reconcile D1/R2 manifests.');
+  }
+}
+
 async function photoRow(env, u, id) {
-  const p = await env.DB.prepare('SELECT p.*, c.agent_id, c.job_id FROM photos p JOIN crew c ON c.id = p.crew_id WHERE p.id = ?').bind(id).first();
+  const p = await env.DB.prepare('SELECT p.*, c.agent_id, c.driver_id, c.job_id FROM photos p JOIN crew c ON c.id = p.crew_id WHERE p.id = ?').bind(id).first();
   if (!p) throw new HttpError(404, 'ไม่พบรูป');
-  if (!isOffice(u) && !seesAllCrew(u) && p.agent_id !== u.id) throw new HttpError(403, 'ไม่มีสิทธิ์ดูรูปนี้');
+  if (!ownCrew(u, p)) throw new HttpError(403, 'ไม่มีสิทธิ์ดูรูปนี้');
   return p;
 }
 
@@ -836,8 +1020,37 @@ async function bootFor(env, u) {
 
 async function checkStorage(env, add) {
   const settings = await loadSettings(env);
-  const used = await env.DB.prepare('SELECT (SELECT COALESCE(SUM(size), 0) FROM photos) + (SELECT COALESCE(SUM(size), 0) FROM crew_files) AS n').first();
+  const used = await env.DB.prepare(`SELECT ${USED_BYTES} AS n`).first();
   if (used.n + add > settings.storage_gb * 1024 ** 3) throw new HttpError(507, 'พื้นที่เก็บไฟล์เต็มแล้ว กรุณาแจ้งผู้ดูแลระบบ');
+}
+
+// Profile photos are re-encoded by the browser; anything still carrying EXIF or XMP (which can hold a location) is refused.
+function hasMetadata(b, type) {
+  const is = (o, s) => o + s.length <= b.length && [...s].every((ch, i) => b[o + i] === ch.charCodeAt(0));
+  if (type === 'image/jpeg') {
+    for (let p = 2; p + 4 <= b.length && b[p] === 0xff;) {
+      const m = b[p + 1];
+      if (m === 0xff) { p++; continue; }
+      if (m === 0xda || m === 0xd9) break;
+      if (m === 0xe1 && (is(p + 4, 'Exif') || is(p + 4, 'http://ns.adobe.com/xap/'))) return true;
+      p += 2 + ((b[p + 2] << 8) | b[p + 3]);
+    }
+    return false;
+  }
+  if (type === 'image/png') {
+    for (let p = 8; p + 8 <= b.length;) {
+      if (is(p + 4, 'eXIf') || (is(p + 4, 'iTXt') && is(p + 8, 'XML:com.adobe.xmp'))) return true;
+      if (is(p + 4, 'IEND')) break;
+      p += 12 + (((b[p] << 24) | (b[p + 1] << 16) | (b[p + 2] << 8) | b[p + 3]) >>> 0);
+    }
+    return false;
+  }
+  for (let p = 12; p + 8 <= b.length;) {
+    if (is(p, 'EXIF') || is(p, 'XMP ')) return true;
+    const len = (b[p + 4] | (b[p + 5] << 8) | (b[p + 6] << 16) | (b[p + 7] << 24)) >>> 0;
+    p += 8 + len + (len & 1);
+  }
+  return false;
 }
 
 function looksLike(b, type) {
@@ -872,15 +1085,32 @@ async function addFile(req, env, u, id, url) {
   const name = str(url.searchParams.get('name'), 160).replace(/[\\/:*?"<>|]+/g, '_') || `${kind}.${ext}`;
   const key = `docs/${c.job_id}/${id}/${Date.now()}-${randomId(8)}.${ext}`;
   await env.FILES.put(key, buf, { httpMetadata: { contentType: type } });
-  let r;
+  let result;
   try {
-    r = await env.DB.prepare('INSERT INTO crew_files (crew_id, kind, name, mime, r2_key, size, at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(id, kind, name, type, key, buf.byteLength, now(), u.id).run();
-  } catch (e) {
-    await env.FILES.delete(key);
+    const settings=await loadSettings(env);
+    [result]=await env.DB.batch([
+      env.DB.prepare(`INSERT INTO crew_files (crew_id,kind,name,mime,r2_key,size,at,user_id)
+        SELECT ?,?,?,?,?,?,?,? WHERE ${FIELD_MUTATION}
+        AND EXISTS(SELECT 1 FROM users WHERE id=? AND role IN ('admin','office'))
+        AND ${USED_BYTES}+?
+          <= COALESCE((SELECT CAST(value AS REAL) FROM settings WHERE key='storage_gb'),?)*1073741824`)
+        .bind(id,kind,name,type,key,buf.byteLength,now(),u.id,...mutationArgs(u,id,c.assignment_rev),u.id,buf.byteLength,settings.storage_gb),
+      env.DB.prepare('INSERT INTO activity(job_id,at,user_id,kind,text) SELECT ?,?,?,?,? WHERE changes()=1')
+        .bind(c.job_id,now(),u.id,'log',`${c.name} · แนบไฟล์ ${FILE_KINDS[kind]}`)
+    ]);
+  } catch(e) {
+    await compensateDocument(env,key);
     throw e;
   }
-  await log(env, c.job_id, u.id, `${c.name} · แนบไฟล์ ${FILE_KINDS[kind]}`);
-  return json({ id: r.meta.last_row_id });
+  if(!result.meta.changes){await compensateDocument(env,key);throw new HttpError(409,'Source access, job state or storage capacity changed. The document was not saved.');}
+  return json({id:result.meta.last_row_id});
+}
+
+async function compensateDocument(env,key) {
+  try {
+    if(!await env.DB.prepare('SELECT 1 FROM crew_files WHERE r2_key=?').bind(key).first())await env.FILES.delete(key);
+  }catch { console.warn('Document upload outcome unknown; retain bytes for reference reconciliation.'); }
+
 }
 
 async function fileRow(env, id) {
@@ -942,6 +1172,44 @@ async function deleteBrand(env, u, kind) {
   return setBrand(env, kind, 0);
 }
 
+/* ---------- profile photos ---------- */
+
+const AVATAR_SESSION = `EXISTS (SELECT 1 FROM sessions s WHERE s.user_id=users.id AND s.token_hash=? AND s.expires_at>?) AND active=1`;
+async function cleanAvatar(env, key) {
+  if (!key) return;
+  try {
+    if (!await env.DB.prepare('SELECT 1 FROM users WHERE avatar_key=?').bind(key).first()) await env.FILES.delete(key);
+  } catch { console.warn('Avatar cleanup deferred; reconcile D1/R2 manifests.'); }
+}
+async function putAvatar(req, env, u) {
+  const { type, buf } = await rawFile(req, ['image/jpeg', 'image/png', 'image/webp'], MAX_AVATAR, 'รองรับเฉพาะไฟล์รูป JPG / PNG / WEBP', 'รูปใหญ่เกิน 1 MB');
+  if (hasMetadata(new Uint8Array(buf), type)) throw new HttpError(400, 'รูปนี้มีข้อมูลแฝงจากกล้อง (เช่น พิกัดที่ถ่าย) กรุณาเปลี่ยนรูปจากหน้าบัญชีของฉัน ระบบจะตัดข้อมูลแฝงออกให้');
+  const settings = await loadSettings(env), limit = settings.storage_gb * 1024 ** 3;
+  await checkStorage(env, buf.byteLength - u.avatar_size);
+  const key = `avatars/${u.id}-${randomId(12)}.${FILE_TYPES[type]}`, at = now();
+  await env.FILES.put(key, buf, { httpMetadata: { contentType: type } });
+  let row;
+  try {
+    [row] = await env.DB.batch([env.DB.prepare(`UPDATE users SET avatar_key=?, avatar_at=?, avatar_size=? WHERE id=? AND avatar_key=? AND ${AVATAR_SESSION} AND ${USED_BYTES}-avatar_size+?<=?`).bind(key,at,buf.byteLength,u.id,u.avatar_key,u.token_hash,now(),buf.byteLength,limit)]);
+  } catch (e) { await cleanAvatar(env,key); throw e; }
+  if (!row.meta.changes) { await cleanAvatar(env,key); throw new HttpError(409, 'Profile, session or storage changed. Refresh and retry.'); }
+  await cleanAvatar(env,u.avatar_key);
+  return json({ avatar_at: at });
+}
+async function deleteAvatar(env, u) {
+  const [row] = await env.DB.batch([env.DB.prepare(`UPDATE users SET avatar_key='', avatar_at=0, avatar_size=0 WHERE id=? AND avatar_key=? AND ${AVATAR_SESSION}`).bind(u.id,u.avatar_key,u.token_hash,now())]);
+  if (!row.meta.changes) throw new HttpError(409, 'Profile or session changed. Refresh and retry.');
+  await cleanAvatar(env,u.avatar_key);
+  return json({ avatar_at: 0 });
+}
+
+async function getAvatar(env, id) {
+  const row = /^[0-9]{1,9}$/.test(id) ? await env.DB.prepare('SELECT avatar_key FROM users WHERE id = ?').bind(Number(id)).first() : null;
+  const obj = row && row.avatar_key ? await env.FILES.get(row.avatar_key) : null;
+  if (!obj) throw new HttpError(404, 'ไม่มีรูปโปรไฟล์');
+  return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata?.contentType || 'image/jpeg', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'" } });
+}
+
 /* ---------- owner page ---------- */
 
 async function publicJob(env, token) {
@@ -961,6 +1229,9 @@ async function publicJob(env, token) {
 
 /* ---------- export & backup ---------- */
 
+// The device time stays in "Actual"; the server receipt time is listed only when it is more than 2 minutes apart.
+const lagged = (at, received) => at != null && received != null && Math.abs(received - at) > 120000;
+const photoState = (x, n) => x.actual == null || !x.need_photo ? '' : n ? 'Attached' : 'Pending';
 const fileDate = (t = now()) => { const p = bkkParts(t); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
 
 function xlsxResponse(sheets, name) {
@@ -999,42 +1270,44 @@ async function exportJob(env, u, id) {
   ];
   const crewSheet = [['No.', 'Name', 'Rank', 'Type', 'Nationality', 'Flight', 'Passport', 'Passport expiry', 'SIRB no.', 'SIRB expiry', 'Vehicle', 'Driver', 'Hotel', 'Room', 'Boarding agent', ...settings.docs.map(d => 'Doc: ' + documentNameEn(d))],
     ...crew.map((c, i) => { const v = veh.get(c.vehicle_id); return [i + 1, c.name, c.rank, c.type === 'on' ? 'On signer' : 'Off signer', c.nationality, c.flight, c.passport, c.passport_exp, c.sirb_no, c.sirb_exp, v ? `${v.name} ${v.plate}` : '', v ? v.driver : '', hot.get(c.hotel_id) || '', c.room, uName.get(c.agent_id) || '', ...settings.docs.map(d => (c.docs[d] ? 'Yes' : 'No'))]; })];
-  const log = [['Name', 'Rank', 'Type', 'Checkpoint', 'Checkpoint (EN)', 'Plan', 'Actual', 'Diff (min)', 'Result', 'Confirmed by'],
-    ...crew.flatMap(c => c.cps.map(x => { const d = x.actual != null && x.plan != null ? Math.round((x.actual - x.plan) / 60000) : ''; return [c.name, c.rank, c.type === 'on' ? 'On signer' : 'Off signer', x.name, x.name_en, bkk(x.plan), bkk(x.actual), d, x.actual == null ? '' : d !== '' && d > late ? 'Late' : 'On time', uName.get(x.by) || '']; }))];
+  const log = [['Name', 'Rank', 'Type', 'Checkpoint', 'Checkpoint (EN)', 'Plan', 'Actual', 'Diff (min)', 'Result', 'Confirmed by', 'Role', 'Received by system', 'Photo required', 'Photo', 'Photo status', 'No-photo reason'],
+    ...crew.flatMap(c => c.cps.map(x => { const d = x.actual != null && x.plan != null ? Math.round((x.actual - x.plan) / 60000) : ''; const n = c.photos.filter(p => p.cp_id === x.id).length; return [c.name, c.rank, c.type === 'on' ? 'On signer' : 'Off signer', x.name, x.name_en, bkk(x.plan), bkk(x.actual), d, x.actual == null ? '' : d !== '' && d > late ? 'Late' : 'On time', uName.get(x.by) || '', ROLE_EN[x.role] || '', lagged(x.actual, x.received) ? bkk(x.received) : '', x.need_photo ? 'Yes' : 'No', n, photoState(x, n), x.skip]; }))];
   const notes = [['Name', 'Time', 'Note', 'By'], ...crew.flatMap(c => c.notes.map(n => [c.name, bkk(n.at), n.text, uName.get(n.by) || '']))];
   return xlsxResponse([
     { name: 'Summary', rows: summary, widths: [30, 50], header: false },
     { name: 'Crew', rows: crewSheet, widths: [5, 26, 10, 12, 14, 12, 14, 14, 14, 14, 18, 18, 28, 8, 18, 14, 14, 14] },
-    { name: 'Time log', rows: log, widths: [26, 10, 12, 24, 24, 18, 18, 10, 10, 18] },
+    { name: 'Time log', rows: log, widths: [26, 10, 12, 24, 24, 18, 18, 10, 10, 18, 11, 18, 14, 7, 13, 30] },
     { name: 'Notes', rows: notes, widths: [26, 18, 60, 18] }
   ], `${j.vessel.replace(/[^A-Za-z0-9]+/g, '-')}-${fileDate()}.xlsx`);
 }
 
 async function allData(env) {
-  const [jobs, crew, cps, users, vehicles, hotels, activity] = await Promise.all([
+  const [jobs, crew, cps, users, vehicles, hotels, activity, photos] = await Promise.all([
     env.DB.prepare('SELECT * FROM jobs ORDER BY id').all(),
     env.DB.prepare('SELECT * FROM crew ORDER BY job_id, id').all(),
     env.DB.prepare('SELECT * FROM checkpoints ORDER BY crew_id, idx').all(),
-    env.DB.prepare('SELECT id, username, name, role, title, phone, active FROM users ORDER BY id').all(),
+    env.DB.prepare('SELECT id, emp_code, username, name, role, title, phone, active, avatar_at FROM users ORDER BY id').all(),
     env.DB.prepare('SELECT * FROM vehicles ORDER BY id').all(),
     env.DB.prepare('SELECT * FROM hotels ORDER BY id').all(),
-    env.DB.prepare('SELECT a.*, u.name AS who FROM activity a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id').all()
+    env.DB.prepare('SELECT a.*, u.name AS who FROM activity a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id').all(),
+    env.DB.prepare('SELECT crew_id, cp_id, COUNT(*) AS n FROM photos WHERE cp_id IS NOT NULL GROUP BY crew_id, cp_id').all()
   ]);
+  const nPhoto = new Map(photos.results.map(x => [x.crew_id + ':' + x.cp_id, x.n]));
   const uName = new Map(users.results.map(x => [x.id, x.name]));
   const crewName = new Map(crew.results.map(x => [x.id, x]));
   const jobName = new Map(jobs.results.map(x => [x.id, x.vessel]));
   return [
     { name: 'Jobs', rows: [['Job ID', 'Vessel', 'Port', 'Owner', 'Owner email', 'Local agent', 'Agent email', 'ETA', 'ETB', 'ETD', 'Status', 'Created', 'Closed'], ...jobs.results.map(j => [j.id, j.vessel, j.port, j.owner, j.owner_email, j.agent, j.agent_email, bkk(j.eta), bkk(j.etb), bkk(j.etd), j.status, bkk(j.created_at), bkk(j.closed_at)])], widths: [8, 26, 18, 22, 26, 22, 26, 17, 17, 17, 8, 17, 17] },
-    { name: 'Crew', rows: [['Crew ID', 'Job ID', 'Vessel', 'Name', 'Rank', 'Type', 'Nationality', 'Flight', 'Passport', 'Passport expiry', 'SIRB no.', 'SIRB expiry', 'Room', 'Boarding agent'], ...crew.results.map(c => [c.id, c.job_id, jobName.get(c.job_id) || '', c.name, c.rank, c.type, c.nationality, c.flight, c.passport, c.passport_exp, c.sirb_no, c.sirb_exp, c.room, uName.get(c.agent_id) || ''])], widths: [8, 8, 24, 26, 10, 6, 14, 12, 14, 14, 14, 14, 8, 18] },
-    { name: 'Time log', rows: [['Job ID', 'Vessel', 'Name', 'No.', 'Checkpoint', 'Plan', 'Actual', 'Diff (min)', 'By'], ...cps.results.map(x => { const c = crewName.get(x.crew_id) || {}; return [c.job_id || '', jobName.get(c.job_id) || '', c.name || '', x.idx + 1, x.name, bkk(x.plan_at), bkk(x.actual_at), x.plan_at && x.actual_at ? Math.round((x.actual_at - x.plan_at) / 60000) : '', uName.get(x.actual_by) || '']; })], widths: [8, 24, 26, 5, 24, 17, 17, 10, 18] },
+    { name: 'Crew', rows: [['Crew ID', 'Job ID', 'Vessel', 'Name', 'Rank', 'Type', 'Nationality', 'Flight', 'Passport', 'Passport expiry', 'SIRB no.', 'SIRB expiry', 'Room', 'Boarding agent', 'Driver account'], ...crew.results.map(c => [c.id, c.job_id, jobName.get(c.job_id) || '', c.name, c.rank, c.type, c.nationality, c.flight, c.passport, c.passport_exp, c.sirb_no, c.sirb_exp, c.room, uName.get(c.agent_id) || '', uName.get(c.driver_id) || ''])], widths: [8, 8, 24, 26, 10, 6, 14, 12, 14, 14, 14, 14, 8, 18, 18] },
+    { name: 'Time log', rows: [['Job ID', 'Vessel', 'Name', 'No.', 'Checkpoint', 'Plan', 'Actual', 'Diff (min)', 'By', 'Role', 'Received by system', 'Photo required', 'Photo', 'Photo status', 'No-photo reason'], ...cps.results.map(x => { const c = crewName.get(x.crew_id) || {}; const n = nPhoto.get(x.crew_id + ':' + x.id) || 0; return [c.job_id || '', jobName.get(c.job_id) || '', c.name || '', x.idx + 1, x.name, bkk(x.plan_at), bkk(x.actual_at), x.plan_at && x.actual_at ? Math.round((x.actual_at - x.plan_at) / 60000) : '', uName.get(x.actual_by) || '', ROLE_EN[x.actual_role] || '', lagged(x.actual_at, x.received_at) ? bkk(x.received_at) : '', x.need_photo ? 'Yes' : 'No', n, photoState({ actual: x.actual_at, need_photo: x.need_photo }, n), x.photo_skip]; })], widths: [8, 24, 26, 5, 24, 17, 17, 10, 18, 11, 18, 14, 7, 13, 30] },
     { name: 'Activity', rows: [['Time', 'Job ID', 'Vessel', 'User', 'Detail'], ...activity.results.map(a => [bkk(a.at), a.job_id, jobName.get(a.job_id) || '', a.who || '', a.text])], widths: [17, 8, 24, 18, 70] },
-    { name: 'Users', rows: [['ID', 'Employee code', 'Username', 'Name', 'Role', 'Title', 'Phone', 'Active'], ...users.results.map(x => [x.id, x.emp_code, x.username, x.name, x.role, x.title, x.phone, x.active ? 'Yes' : 'No'])], widths: [5, 14, 18, 24, 10, 22, 14, 8] },
-    { name: 'Vehicles', rows: [['ID', 'Name', 'Plate', 'Driver', 'Driver (EN)', 'Driver ID', 'Phone', 'Active'], ...vehicles.results.map(v => [v.id, v.name, v.plate, v.driver, v.driver_en, v.driver_id, v.driver_phone, v.active ? 'Yes' : 'No'])] },
+    { name: 'Users', rows: [['ID', 'Employee code', 'Username', 'Name', 'Role', 'Title', 'Phone', 'Active', 'Profile photo'], ...users.results.map(x => [x.id, x.emp_code, x.username, x.name, x.role, x.title, x.phone, x.active ? 'Yes' : 'No', x.avatar_at ? 'Yes' : 'No'])], widths: [5, 14, 18, 24, 10, 22, 14, 8, 13] },
+    { name: 'Vehicles', rows: [['ID', 'Name', 'Plate', 'Driver', 'Driver (EN)', 'Driver ID', 'Phone', 'Active', 'Driver account'], ...vehicles.results.map(v => [v.id, v.name, v.plate, v.driver, v.driver_en, v.driver_id, v.driver_phone, v.active ? 'Yes' : 'No', uName.get(v.user_id) || ''])] },
     { name: 'Hotels', rows: [['ID', 'Name', 'Phone', 'Active'], ...hotels.results.map(h => [h.id, h.name, h.phone, h.active ? 'Yes' : 'No'])] }
   ];
 }
 
-export const DUMP_TABLES = ['users', 'settings', 'vehicles', 'hotels', 'jobs', 'crew', 'checkpoints', 'notes', 'photos', 'crew_files', 'activity'];
+export const DUMP_TABLES = ['users', 'settings', 'vehicles', 'hotels', 'jobs', 'crew', 'checkpoints', 'notes', 'photos', 'crew_files', 'activity', ...WORKFLOW_TABLES];
 const DAILY_KEEP = 35;
 
 async function listBackups(env, u) {

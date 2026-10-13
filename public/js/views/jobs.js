@@ -30,7 +30,7 @@ export function readJobForm(fd) {
 export async function enter(r, alive) {
   if (r.name === 'newjob') {
     app().innerHTML = `<div class="narrow2"><a class="back" href="/jobs" data-link>${icon('left')}งานทั้งหมด</a>
-      <div class="card" style="margin-top:10px"><div class="card-h"><h3>เปิดงานเปลี่ยนลูกเรือใหม่</h3></div><div class="card-b">
+      <div class="card" style="margin-top:10px"><div class="card-h"><h2>เปิดงานเปลี่ยนลูกเรือใหม่</h2></div><div class="card-b">
       <p class="muted s14" style="margin:0 0 14px">กรอกแค่ <b>ชื่อเรือ</b> ก็เปิดงานได้ ช่องอื่นเติมหรือแก้ทีหลังได้ทุกช่อง</p>
       <form id="newjob">${jobForm()}<div class="ferr" role="alert"></div><div class="row" style="margin-top:14px"><button class="btn" type="submit">${icon('plus')}เปิดงาน</button><a class="btn line" href="/jobs" data-link>ยกเลิก</a></div></form></div></div></div>`;
     document.getElementById('newjob').addEventListener('submit', async e => {
@@ -54,7 +54,7 @@ export async function enter(r, alive) {
     const nUsers = A.users.filter(u => u.active).length, nVeh = A.vehicles.filter(v => v.active).length, nHot = A.hotels.filter(h => h.active).length;
     if (nUsers < 2 || !nVeh || !nHot) {
       const li = (ok, href, name, note) => `<li class="${ok ? 'done' : ''}"><span class="st">${ok ? icon('check') : ''}</span><span><a href="${href}" data-link>${name}</a><span class="sub">${note}</span></span></li>`;
-      el.insertAdjacentHTML('beforebegin', `<div class="card start"><div class="card-h"><h3>เริ่มใช้งานระบบ</h3><span class="sub">ทำครั้งเดียว แล้วกล่องนี้จะหายไป</span></div><div class="card-b"><ol>
+      el.insertAdjacentHTML('beforebegin', `<div class="card start"><div class="card-h"><h2>เริ่มใช้งานระบบ</h2><span class="sub">ทำครั้งเดียว แล้วกล่องนี้จะหายไป</span></div><div class="card-b"><ol>
         ${li(nUsers >= 2, '/admin/users', 'เพิ่มผู้ใช้', nUsers >= 2 ? `มีแล้ว ${nUsers} บัญชี` : 'สร้างบัญชีให้พนักงานสำนักงานและพนักงานภาคสนาม')}
         ${li(nVeh > 0, '/admin/vehicles', 'เพิ่มรถและคนขับ', nVeh ? `มีแล้ว ${nVeh} คัน` : 'ใช้เลือกในขั้นตอนที่ 7 และอีเมลขอผ่านท่า')}
         ${li(nHot > 0, '/admin/hotels', 'เพิ่มโรงแรม', nHot ? `มีแล้ว ${nHot} แห่ง` : 'ใช้เลือกในขั้นตอนที่ 7')}
