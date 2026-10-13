@@ -77,7 +77,8 @@ main { max-width:1440px; margin:0 auto; padding:24px 20px 80px; }
 .office { display:grid; grid-template-columns:288px minmax(0,1fr); gap:24px; align-items:start; }
 .office > *, .cols > *, .withphone > *, .hero > *, .stack > * { min-width:0; }
 .doc, .pill, .tag, .who2 .nm, .who2 .sub { white-space:nowrap; }
-.side { position:sticky; top:86px; display:grid; gap:14px; }
+/* Keep nowrap vessel names inside the sidebar's assigned grid width. */
+.side { position:sticky; top:86px; display:grid; grid-template-columns:minmax(0,1fr); gap:14px; }
 .jobcard { padding:16px 18px; }
 .jobcard .v { font-size:17px; font-weight:600; letter-spacing:-.01em; }
 .jobcard .p { font-size:13.5px; color:var(--muted); }
