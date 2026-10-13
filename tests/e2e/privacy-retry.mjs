@@ -18,7 +18,13 @@ const flush = () => b.eval(`(async()=>{const a=await import('/js/api.js');return
 const blockUploads = () => b.eval(`window.originalFetch=window.fetch;window.fetch=(url,opts)=>String(url).includes('/photos?')?Promise.resolve(new Response(JSON.stringify({error:'Synthetic temporary upload outage'}),{status:503,headers:{'content-type':'application/json'}})):window.originalFetch(url,opts)`);
 const unblock = () => b.eval(`if(window.originalFetch){window.fetch=window.originalFetch;delete window.originalFetch}`);
 const account = () => b.eval(`(async()=>{const a=await import('/js/app.js');a.go('/account');await new Promise(r=>setTimeout(r,100))})()`);
-const logout = async () => { await b.eval(`document.querySelector('[data-act="logout"]').click()`); await new Promise(r => setTimeout(r,700)); };
+const logout = async () => {
+  // Account navigation and session loading can exceed a fixed delay under load.
+  // Wait for its real control before interacting; do not hide a missing control.
+  for (let i=0;i<100&&!await b.eval(`!!document.querySelector('[data-act="logout"]')`);i++) await new Promise(r=>setTimeout(r,100));
+  assert.equal(await b.eval(`!!document.querySelector('[data-act="logout"]')`),true,'account logout control must finish loading');
+  await b.eval(`document.querySelector('[data-act="logout"]').click()`); await new Promise(r => setTimeout(r,700));
+};
 async function fresh() {
   ck = await login('somsak', FIELD_PASS);
   uid = (await read('/api/me')).user.id;
