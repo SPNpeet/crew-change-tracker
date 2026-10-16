@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { png, pdf, sheetRows } from './gen.mjs';
 
-const PORT = 8931;
+const PORT = Number(process.env.CCT_TEST_PORT) || 8931;
 const BASE = `http://127.0.0.1:${PORT}`;
 const KEY = 'test-setup-key';
 const persist = mkdtempSync(join(tmpdir(), 'cct-test-'));
@@ -102,6 +102,22 @@ test('login, wrong password, lockout', async () => {
   assert.equal(locked.status, 401, 'a locked account refuses the correct password');
   assert.equal(locked.headers.get('set-cookie'), null);
   assert.equal((await anon('GET', '/api/me')).status, 401);
+});
+
+test('a work email can be the username and logs in in any letter case', async () => {
+  const list = (await admin('GET', '/api/users')).data.users;
+  const spare = list.find(x => x.username === 'user5');
+  assert.equal((await admin('PATCH', '/api/users/' + spare.id, { active: false })).status, 200);
+  const r = await admin('POST', '/api/users', { username: 'Staff.One@Example-Co.com', name: 'พนักงานอีเมล', role: 'office', password: 'office12345' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const u = (await admin('GET', '/api/users')).data.users.find(x => x.id === r.data.id);
+  assert.equal(u.username, 'staff.one@example-co.com', 'stored in lower case');
+  const c = client();
+  assert.equal((await c('POST', '/api/login', { username: 'STAFF.ONE@example-co.com', password: 'office12345' })).status, 200);
+  assert.equal((await admin('POST', '/api/users', { username: 'staff.one@example-co.com', name: 'dup', role: 'office', password: 'office12345' })).status, 409);
+  for (const bad of ['a@b@c.com', '@example.com', 'name@', 'x y@example.com']) {
+    assert.equal((await admin('POST', '/api/users', { username: bad, name: 'bad', role: 'field', password: 'field12345' })).status, 400, bad);
+  }
 });
 
 test('a locked account answers exactly like an unknown username', async () => {

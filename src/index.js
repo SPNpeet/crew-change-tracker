@@ -179,8 +179,11 @@ async function boot(env, u) {
 /* ---------- users & resources ---------- */
 
 async function insertUser(env, b) {
-  const username = str(b.username, 40).toLowerCase();
-  if (!/^[a-z0-9._-]{3,40}$/.test(username)) throw new HttpError(400, 'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z 0-9 . _ - ยาว 3–40 ตัว');
+  // A plain name (somsak) or a work email (name@company.com): the customer signs in with email addresses.
+  const username = str(b.username, 64).trim().toLowerCase();
+  if (!/^[a-z0-9._-]{3,40}$/.test(username) && !/^[a-z0-9._+-]{1,64}@[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(username)) {
+    throw new HttpError(400, 'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z 0-9 . _ - ยาว 3–40 ตัว หรืออีเมล เช่น name@company.com');
+  }
   const name = str(b.name, 80);
   if (!name) throw new HttpError(400, 'กรุณากรอกชื่อ');
   if (!['admin', 'office', 'field'].includes(b.role)) throw new HttpError(400, 'สิทธิ์ไม่ถูกต้อง');
