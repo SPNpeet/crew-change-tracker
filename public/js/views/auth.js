@@ -24,7 +24,7 @@ export async function enter(r, alive = () => true) {
       <form class="form1" id="setupf" autocomplete="off">
         <label class="f">รหัสติดตั้ง<input name="key" type="password" required></label>
         <label class="f">ชื่อที่แสดง<input name="name" required maxlength="80" placeholder="เช่น คุณสมหญิง"></label>
-        <label class="f">ชื่อผู้ใช้ (ภาษาอังกฤษ)<input name="username" required pattern="[A-Za-z0-9._\-]{3,40}" autocapitalize="none" placeholder="เช่น somying"></label>
+        <label class="f">ชื่อผู้ใช้ (ภาษาอังกฤษ หรืออีเมล)<input name="username" required pattern="[A-Za-z0-9._\\-]{3,40}|[A-Za-z0-9._+\\-]{1,64}@[A-Za-z0-9\\-]+(\\.[A-Za-z0-9\\-]+)+" autocapitalize="none" spellcheck="false" placeholder="เช่น somying หรือ name@company.com"></label>
         <label class="f">รหัสผ่าน (อย่างน้อย 8 ตัว)<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
         <div class="ferr" role="alert"></div>
         <button class="btn block big-btn" type="submit">สร้างบัญชีและเข้าสู่ระบบ</button></form>`);
